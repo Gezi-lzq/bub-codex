@@ -1,0 +1,20 @@
+[project]
+name = "bub-codex"
+version = "0.1.0"
+description = "Bub-native Codex runtime plugin"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bub",
+    "openai-codex @ git+https://github.com/openai/codex.git#subdirectory=sdk/python",
+    "republic",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+]
+
+[project.entry-points."bub"]
+codex = "bub_codex.plugin:create_plugin"
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10.0"]
+build-backend = "uv_build"
