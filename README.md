@@ -1,53 +1,79 @@
 # bub-codex
 
-`bub-codex` is a Bub plugin that runs Codex as a Bub-native coding runtime.
+Codex runtime plugin for `bub`.
 
-The plugin does not wrap Bub around `codex e` as an opaque subprocess. It uses
-the Codex SDK/app-server path directly, projects Codex notifications into Bub
-tape events, and lets Bub own session identity, tape storage, command routing,
-and stream delivery.
+This package is a Bub-native Codex runtime. It uses the Codex SDK/app-server
+path directly instead of wrapping Bub around `codex e` as an opaque subprocess.
+
+It is intentionally different from the historical `bub-contrib` `bub-codex`
+plugin:
+
+- the contrib plugin implements `run_model` by invoking `codex e resume ...`;
+- this package implements live `run_model_stream` through the Codex SDK;
+- runtime continuity is derived from Bub tape events and Anchors, not from a
+  workspace JSON file.
 
 ## What It Provides
 
-- A Bub plugin entry point: `bub_codex.plugin:create_plugin`.
-- A live `run_model_stream` implementation backed by the Codex SDK.
-- Tape-first runtime context resolution for Bub `session_id` / tape id /
-  Codex `thread_id` / Anchor continuity.
-- Existing Codex thread resume from tape-derived bindings.
-- Codex compaction projection into Bub Anchors.
-- Current-thread notification filtering.
-- Minimal runtime diagnostic events for resume and stream failures.
-- Bub comma-command delegation back to the builtin Bub agent.
+- Bub plugin entry point: `codex`
+- A `run_model_stream` hook implementation backed by the Codex SDK
+- Tape-first session/thread resume
+- Codex compaction projection into Bub Anchors
+- Current-thread notification filtering
+- Bub comma-command delegation back to the builtin Bub agent
+- Explicit runtime errors when Codex cannot be configured or resumed
 
-## Install
+## Installation
 
-Install the package into the same Python environment that runs Bub:
+Install from this repository into the same Python environment that runs Bub:
+
+```bash
+uv pip install "git+https://github.com/<owner>/bub-codex.git"
+```
+
+For local development:
 
 ```bash
 uv pip install -e .
 ```
 
-The project depends on `bub`, `republic`, and the Codex Python SDK:
+When published through the Bub plugin catalog, it can also be installed with
+Bub:
+
+```bash
+bub install bub-codex@main
+```
+
+## Prerequisites
+
+- Python 3.12+
+- Bub
+- Codex CLI installed and authenticated
+- The Codex Python SDK importable as `openai_codex`
+
+The project currently depends on the Codex SDK from the Codex repository:
 
 ```toml
 openai-codex @ git+https://github.com/openai/codex.git#subdirectory=sdk/python
 ```
 
-Verify that Bub can discover the plugin:
+## Configuration
 
-```bash
-BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
-```
+The plugin reads Bub config under the `codex` section and environment variables
+with the `BUB_CODEX_` prefix.
 
-Expected output:
+Environment variables:
 
-```text
-OK: Bub discovered installed bub-codex plugin (run_model_stream: builtin, codex).
-```
+- `BUB_CODEX_ENABLED` (optional, default: `true`): enable the plugin runtime
+- `BUB_CODEX_CODEX_BIN` (optional): path to the `codex` binary
+- `BUB_CODEX_SDK_PYTHON_PATH` (optional): local Codex SDK source path
+- `BUB_CODEX_WORKSPACE` (optional): workspace override
+- `BUB_CODEX_APPROVAL_POLICY` (optional, default: `never`)
+- `BUB_CODEX_SANDBOX` (optional, default: `danger-full-access`)
+- `BUB_CODEX_CONFIG_OVERRIDES` (optional): extra Codex config overrides
+- `BUB_CODEX_USE_BUB_TAPE_STORE` (optional, default: `true`)
 
-## Configure
-
-`bub-codex` registers a Bub config section named `codex`.
+Equivalent Bub config shape:
 
 ```yaml
 codex:
@@ -62,9 +88,7 @@ codex:
   use_bub_tape_store: true
 ```
 
-The same settings can be supplied with `BUB_CODEX_*` environment variables.
-
-Common local settings:
+Common local setup:
 
 ```bash
 export BUB_CODEX_ENABLED=true
@@ -73,77 +97,61 @@ export BUB_CODEX_APPROVAL_POLICY=never
 export BUB_CODEX_SANDBOX=danger-full-access
 ```
 
-Notes:
+## Usage
 
-- `approval_policy=never` and `sandbox=danger-full-access` are the default v0
-  local runtime posture.
-- `sdk_python_path` is only a development escape hatch for a local Codex SDK
-  checkout.
-- If the runtime cannot be configured, the plugin returns an explicit Bub stream
-  error instead of silently falling back to another runtime.
-
-## Use With Bub
-
-After installing the package into Bub's Python environment, start Bub normally:
+Start Bub normally after the plugin is installed:
 
 ```bash
 python -m bub --workspace /path/to/workspace chat --session-id my-session
 ```
 
-When enabled, `bub-codex` participates as a Bub `run_model_stream` plugin. Normal
-prompts are handled by Codex. Bub comma commands, such as `,help`, are delegated
-back to Bub's builtin agent behavior.
+Normal chat turns are handled by Codex through `run_model_stream`. Bub comma
+commands, such as `,help`, are delegated back to the builtin Bub agent.
 
-## Runtime Semantics
+## Runtime Behavior
 
-The live path is:
-
-```text
-Bub run_model_stream
-  -> bub-codex plugin
-  -> RuntimeContextKernel
-  -> Codex SDK turn session
-  -> CodexTurnTranslator
-  -> Bub tape events
-  -> Bub stream text/final
-```
-
-Key rules:
-
-- Bub tape is the canonical runtime history.
-- A Bub Anchor is the context boundary used to materialize or resume a Codex
-  thread.
-- A Codex `thread_id` is executable only after it is bound to a committed Anchor.
-- If a bound Codex thread cannot be resumed, the failure is surfaced; the runtime
-  does not create a replacement thread behind the user's back.
-- Codex `phase=commentary` assistant messages are written to tape but are not
-  emitted as Bub text.
-- Codex `phase=final_answer` assistant messages drive Bub `text` and
-  `final.text`.
-- Codex compaction creates a Bub Anchor and preserves continuity by binding that
-  Anchor to the same Codex thread.
+- Workspace resolution:
+  - Uses `codex.workspace` config when set
+  - Otherwise uses Bub's framework workspace
+  - Per turn, uses `state["_runtime_workspace"]` when Bub provides it
+- Codex runtime:
+  - Builds a Codex SDK client with `experimental_api=True`
+  - Starts and initializes the Codex app-server client lazily inside Bub's turn
+    lifecycle
+  - Reuses the runtime while the workspace/config/tape-store cache key stays
+    stable
+- Tape behavior:
+  - Uses Bub's active tape store when available
+  - Falls back to an in-memory tape store when Bub does not expose one
+  - Fails fast for async-only Republic tape stores in the current v0 runtime
+- Resume behavior:
+  - Resumes the Codex thread bound to the latest Bub Anchor
+  - Materializes a new Codex thread when the latest Anchor has no binding
+  - Surfaces resume failure instead of silently creating a replacement thread
+- Stream behavior:
+  - Writes commentary and tool lifecycle events to tape
+  - Emits final-answer text to Bub's stream output
+  - Projects Codex compaction notifications into Bub Anchors
 
 See [docs/design.md](docs/design.md) for the architecture and event model.
 
-## Verify
+## Verification
 
-Run the default local checks:
+Verify plugin discovery:
+
+```bash
+BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
+```
+
+Expected output:
+
+```text
+OK: Bub discovered installed bub-codex plugin (run_model_stream: builtin, codex).
+```
+
+Run local checks:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 PYTHONPATH=src .venv/bin/python -m py_compile src/bub_codex/*.py tests/*.py scripts/*.py
-python scripts/verify_installed_plugin.py
 ```
-
-## Important Files
-
-- `src/bub_codex/plugin.py` - Bub plugin entry point.
-- `src/bub_codex/config.py` - Bub config model.
-- `src/bub_codex/runtime_services.py` - runtime construction, caching, and
-  tape-store selection.
-- `src/bub_codex/runtime_context.py` - Anchor/thread lifecycle kernel.
-- `src/bub_codex/live_stream.py` - live Codex notification bridge.
-- `src/bub_codex/codex_thread_service.py` - Codex SDK thread and turn adapter.
-- `src/bub_codex/turn_translator.py` - notification-to-tape/stream translator.
-- `src/bub_codex/republic_tape_store.py` - Bub/Republic tape-store adapter.
-- `scripts/verify_installed_plugin.py` - installed plugin discovery check.
