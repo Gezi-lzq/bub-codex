@@ -152,27 +152,23 @@ side_effect started/completed events present
 ```text
 tests/test_live_stream.py
   test_live_bridge_resumes_thread_from_tape_binding
+  test_live_bridge_surfaces_resume_failure_without_materializing_replacement
 ```
 
 但还缺：
 
 - real SDK two-turn resume smoke。
-- resume failure surfaced 的 live stream boundary 测试。
 - resume failure 的 stream error payload / tape error semantics 明确化。
 
 PRD 要求 resume failure 不自动创建 replacement thread。实现层 `BubCodexRuntime.ensure_thread_context()` 会直接抛出 `resume_thread()` 异常，live bridge 会转成 stream error。这条主语义成立，但测试不够直接。
 
 ### Latest Anchor without binding materializes new thread
 
-runtime facade 支持该路径，但 live bridge 层缺少直接测试。
-
-应补：
+runtime facade 支持该路径，live bridge 层已补测试：
 
 ```text
-Given tape has latest bub.anchor.created but no codex.thread.bound
-When live run starts
-Then materialize_thread is called
-And codex.thread.bound is appended after materialization success
+tests/test_live_stream.py
+  test_live_bridge_materializes_thread_from_latest_anchor_without_binding
 ```
 
 ### Command / side-effect coverage
@@ -219,30 +215,31 @@ not release-ready MVP
 
 ### P0: live resume failure test
 
-必须补。
+已补。
 
 价值：
 
 - 保护“resume failure 先暴露，不自动 new thread”的核心决策。
 - 防止未来引入 Multica-style fallback fresh thread。
 
-建议测试：
-
 ```text
-store has anchor + thread binding
-FakeMaterializingThreadService.resume_thread raises RuntimeError
-live.run_stream returns error/text/final(ok=false)
-threads.created == []
+tests/test_live_stream.py
+  test_live_bridge_surfaces_resume_failure_without_materializing_replacement
 ```
 
 ### P0: latest Anchor without binding live test
 
-必须补。
+已补。
 
 价值：
 
 - 覆盖 handoff/new-thread materialization 直觉路径。
 - 保护“先 Anchor，后 thread binding”的设计。
+
+```text
+tests/test_live_stream.py
+  test_live_bridge_materializes_thread_from_latest_anchor_without_binding
+```
 
 ### P0: installed plugin verification command
 

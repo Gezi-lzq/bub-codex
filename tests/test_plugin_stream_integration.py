@@ -8,8 +8,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+TESTS = ROOT / "tests"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(TESTS) not in sys.path:
+    sys.path.insert(0, str(TESTS))
 
 from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization  # noqa: E402
 from bub_codex.plugin import BubCodexRuntimeStreamService  # noqa: E402
