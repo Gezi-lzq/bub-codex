@@ -5,11 +5,34 @@ for workspace selection, session identity, tape storage, and stream delivery.
 Codex is responsible for model turns, tool execution through its SDK runtime,
 and Codex thread continuity.
 
+## Bub Turn Pipeline Integration
+
+`bub-codex` does not replace Bub's turn pipeline. It participates at the model
+execution hook:
+
+```text
+inbound
+  -> resolve_session
+  -> load_state
+  -> build_prompt
+  -> run_model_stream        # handled by bub-codex
+  -> save_state
+  -> render_outbound
+  -> dispatch_outbound
+```
+
+Bub still owns session resolution, state loading, prompt construction, state
+saving, outbound rendering, and outbound dispatch. `bub-codex` only changes what
+happens inside `run_model_stream` for normal chat prompts.
+
+Comma commands remain Bub-native. When the prompt is a comma command such as
+`,help`, `BubCodexPlugin` delegates back to the builtin Bub agent instead of
+sending the command to Codex.
+
 ## Runtime Flow
 
 ```text
-Bub chat turn
-  -> Bub plugin hook: run_model_stream
+Bub run_model_stream hook
   -> BubCodexPlugin
   -> LazyRuntimeStreamService
   -> BubCodexLiveRuntimeStreamService
@@ -22,6 +45,19 @@ Bub chat turn
 
 The live path is the production path. `BubCodexRuntime.run_turn()` remains a
 batch/reference facade for tests and projection checks.
+
+Inside `run_model_stream`, the runtime flow is:
+
+```text
+prompt + session_id + Bub state
+  -> resolve workspace and tape id
+  -> ensure executable Codex thread context from Bub tape
+  -> start a Codex turn session
+  -> consume Codex notification records
+  -> translate records into Bub tape events and stream decisions
+  -> append tape events before emitting corresponding stream output
+  -> close the Codex turn session
+```
 
 ## Identity Model
 

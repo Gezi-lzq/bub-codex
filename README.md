@@ -118,6 +118,11 @@ commands, such as `,help`, are delegated back to the builtin Bub agent.
 
 ## Runtime Behavior
 
+`bub-codex` does not replace Bub's full turn pipeline. Bub still handles
+inbound messages, session resolution, state loading, prompt construction, state
+saving, outbound rendering, and dispatch. The plugin handles the
+`run_model_stream` stage for normal chat prompts.
+
 - Workspace resolution:
   - Uses `codex.workspace` config when set
   - Otherwise uses Bub's framework workspace
