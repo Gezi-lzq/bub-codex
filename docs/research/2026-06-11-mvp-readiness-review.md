@@ -277,6 +277,8 @@ CodexTurnTranslator 接收 expected_thread_id，可忽略或记录 foreign-threa
 
 但这会扩大 Translator Interface。也可以先在 `MaterializingCodexThreadService.run_turn_stream_records()` 过滤。
 
+后续实现已将 live seam 收敛为 `MaterializingCodexThreadService.start_turn_stream() -> CodexTurnSession`，过滤逻辑位于 `CodexTurnSession.records()` 与 live bridge 输入边界。
+
 ### P1: diagnostic/error event schema
 
 当前错误主要转成 stream error：

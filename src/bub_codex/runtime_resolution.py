@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Iterable, Literal
 
-from .context_materialization import active_thread_id_for_anchor, latest_anchor_created
 from .tape_events import JsonObject, TapeEvent
+from .new_thread_materialization import active_thread_id_for_anchor, latest_anchor_created
 
 
 RuntimeAction = Literal["bootstrap", "materialize_thread", "resume_thread"]

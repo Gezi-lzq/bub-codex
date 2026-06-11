@@ -159,6 +159,14 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertIn("codex.thread.compacted", event_types)
         self.assertEqual(len(compact_anchors), 1)
         self.assertEqual(compact_anchors[0].payload["reason"], "auto_compact")
+        compact_bindings = [
+            event
+            for event in result.tape_events
+            if event.type == "codex.thread.bound" and event.payload.get("reason") == "compact_continuity"
+        ]
+        self.assertEqual(len(compact_bindings), 1)
+        self.assertEqual(compact_bindings[0].anchor_id, compact_anchors[0].anchor_id)
+        self.assertEqual(compact_bindings[0].thread_id, compact_anchors[0].thread_id)
 
 
 def _translator() -> CodexTurnTranslator:

@@ -45,16 +45,37 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         )
         service = MaterializingCodexThreadService(client, cwd="/workspace")
 
-        records = list(
-            service.run_turn_stream_records(
-                thread_id="current-thread",
-                cwd="/workspace",
-                prompt="hello",
-            )
+        session = service.start_turn_stream(
+            thread_id="current-thread",
+            cwd="/workspace",
+            prompt="hello",
         )
+        try:
+            records = list(session.records())
+        finally:
+            session.close()
 
         self.assertEqual([record["method"] for record in records], ["turn/started", "item/completed", "turn/completed"])
         self.assertTrue(all(record["payload"]["threadId"] == "current-thread" for record in records))
+        self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
+
+    def test_turn_session_close_unregisters_notifications(self) -> None:
+        client = FakeCodexClient(
+            [
+                _event(turn_started(thread_id="current-thread", turn_id="turn-1")),
+            ]
+        )
+        service = MaterializingCodexThreadService(client, cwd="/workspace")
+
+        session = service.start_turn_stream(
+            thread_id="current-thread",
+            cwd="/workspace",
+            prompt="hello",
+        )
+        records = session.records()
+        self.assertEqual(next(records)["method"], "turn/started")
+        session.close()
+
         self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
 
     def test_close_closes_underlying_codex_client_when_supported(self) -> None:

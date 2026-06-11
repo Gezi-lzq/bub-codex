@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -40,10 +40,23 @@ class RecordingLiveThreadService:
         self.inner.resume_thread(thread_id)
         self.resumed.append(thread_id)
 
-    def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str) -> Iterable[dict[str, Any]]:
-        for record in self.inner.run_turn_stream_records(thread_id=thread_id, cwd=cwd, prompt=prompt):
+    def start_turn_stream(self, *, thread_id: str, cwd: str, prompt: str):
+        session = self.inner.start_turn_stream(thread_id=thread_id, cwd=cwd, prompt=prompt)
+        return RecordingTurnSession(session, self.streamed_records)
+
+
+@dataclass(slots=True)
+class RecordingTurnSession:
+    inner: Any
+    streamed_records: list[dict[str, Any]]
+
+    def records(self):
+        for record in self.inner.records():
             self.streamed_records.append(record)
             yield record
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 def add_sdk_to_path(sdk_python_dir: Path | None) -> None:
@@ -97,7 +110,7 @@ async def run_live_turn(
         )
     )
     runtime = BubCodexRuntime(store, service)
-    live = BubCodexLiveRuntimeStreamService(runtime, service)
+    live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, service)
     result = await run_plugin_stream_once(
         live,
         prompt=prompt,

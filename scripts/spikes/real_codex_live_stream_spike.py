@@ -86,7 +86,7 @@ async def main() -> None:
             initial_prompt_factory=lambda _anchor_id, _intent: "Reply exactly with: materialized",
         )
         runtime = BubCodexRuntime(store, service)
-        live = BubCodexLiveRuntimeStreamService(runtime, service)
+        live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, service)
         result = await run_plugin_stream_once(
             live,
             prompt=(

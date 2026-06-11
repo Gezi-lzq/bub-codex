@@ -1,56 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Literal, Protocol
+from dataclasses import dataclass, field
+from typing import Protocol
 
-from .context_materialization import (
-    build_initial_input,
-    create_new_thread_anchor_events,
-    find_anchor_created,
-    materialize_thread_binding_events,
-    materialize_thread_binding_failed_events,
-    select_context_refs,
-)
-from .codex_thread_service import CodexTurn, ThreadMaterialization
-from .materialization_projection import project_thread_materialization_events
+from .codex_thread_service import CodexTurn
 from .runtime_adapter import facts_from_notification_record
-from .runtime_diagnostics import runtime_error_event
-from .runtime_resolution import RuntimeContextResolution
+from .runtime_context import (
+    CodexThreadContextAdapter,
+    ContextUnavailable,
+    ExecutableContext,
+    RuntimeContext,
+    RuntimeContextKernel,
+    RuntimeStartResult,
+)
 from .tape_events import JsonObject, TapeEvent
 from .tape_store import TapeStore
 from .turn_projection import project_user_turn_events
 
 
-RuntimeStartStatus = Literal["bootstrapped", "materialized", "resumed", "bind_failed"]
-
-
-class CodexThreadService(Protocol):
-    """Minimal thread lifecycle boundary used by the runtime facade."""
-
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> str | ThreadMaterialization:
-        ...
-
-    def resume_thread(self, thread_id: str) -> None:
-        ...
+class CodexThreadService(CodexThreadContextAdapter, Protocol):
+    """Codex thread adapter with the batch/reference user-turn method."""
 
     def run_turn(self, *, thread_id: str, cwd: str, prompt: str) -> CodexTurn:
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeStartResult:
-    status: RuntimeStartStatus
-    resolution: RuntimeContextResolution
-    anchor_id: str | None
-    thread_id: str | None
-    appended_events: tuple[TapeEvent, ...]
-    error: JsonObject | None = None
-
-    def to_json(self) -> JsonObject:
-        data = asdict(self)
-        data["resolution"] = self.resolution.to_json()
-        data["appended_events"] = [event.to_json() for event in self.appended_events]
-        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,78 +45,10 @@ class RuntimeTurnResult:
 class BubCodexRuntime:
     tape_store: TapeStore
     codex_threads: CodexThreadService
+    context_kernel: RuntimeContextKernel = field(init=False)
 
-    def ensure_thread_context(
-        self,
-        *,
-        session_id: str,
-        tape_id: str,
-        cwd: str,
-        intent: str,
-        workspace_metadata: JsonObject | None = None,
-    ) -> RuntimeStartResult:
-        events = self.tape_store.events(session_id=session_id, tape_id=tape_id)
-        resolution = self.tape_store.resolve_runtime_context(session_id=session_id, tape_id=tape_id)
-
-        if resolution.action == "resume_thread":
-            assert resolution.thread_id is not None
-            try:
-                self.codex_threads.resume_thread(resolution.thread_id)
-            except Exception as exc:
-                diagnostic = runtime_error_event(
-                    stage="thread_resume",
-                    exc=exc,
-                    session_id=session_id,
-                    tape_id=tape_id,
-                    anchor_id=resolution.anchor_id,
-                    thread_id=resolution.thread_id,
-                )
-                self.tape_store.append(diagnostic)
-                raise
-            return RuntimeStartResult(
-                status="resumed",
-                resolution=resolution,
-                anchor_id=resolution.anchor_id,
-                thread_id=resolution.thread_id,
-                appended_events=(),
-            )
-
-        if resolution.action == "bootstrap":
-            anchor_events = create_new_thread_anchor_events(
-                events,
-                session_id=session_id,
-                tape_id=tape_id,
-                reason="session_start",
-                intent=intent,
-                owner="human",
-                initiator="bub_runtime",
-            )
-            self.tape_store.append_many(anchor_events)
-            return self._materialize_from_latest_anchor(
-                base_events=[*events, *anchor_events],
-                resolution=resolution,
-                session_id=session_id,
-                tape_id=tape_id,
-                cwd=cwd,
-                intent=intent,
-                workspace_metadata=workspace_metadata,
-                reason="session_start",
-                status="bootstrapped",
-                already_appended=tuple(anchor_events),
-            )
-
-        return self._materialize_from_latest_anchor(
-            base_events=events,
-            resolution=resolution,
-            session_id=session_id,
-            tape_id=tape_id,
-            cwd=cwd,
-            intent=intent,
-            workspace_metadata=workspace_metadata,
-            reason="anchor_materialization",
-            status="materialized",
-            already_appended=(),
-        )
+    def __post_init__(self) -> None:
+        self.context_kernel = RuntimeContextKernel(self.tape_store, self.codex_threads)
 
     def run_turn(
         self,
@@ -156,7 +60,7 @@ class BubCodexRuntime:
         intent: str | None = None,
         workspace_metadata: JsonObject | None = None,
     ) -> RuntimeTurnResult:
-        start = self.ensure_thread_context(
+        start = self.context_kernel.ensure_thread_context(
             session_id=session_id,
             tape_id=tape_id,
             cwd=cwd,
@@ -186,139 +90,6 @@ class BubCodexRuntime:
             appended_events=tuple(turn_events),
         )
 
-    def _materialize_from_latest_anchor(
-        self,
-        *,
-        base_events: list[TapeEvent],
-        resolution: RuntimeContextResolution,
-        session_id: str,
-        tape_id: str,
-        cwd: str,
-        intent: str,
-        workspace_metadata: JsonObject | None,
-        reason: str,
-        status: Literal["bootstrapped", "materialized"],
-        already_appended: tuple[TapeEvent, ...],
-    ) -> RuntimeStartResult:
-        anchor_id = _latest_anchor_id(base_events)
-        if anchor_id is None:
-            raise RuntimeError("cannot materialize thread without a committed Anchor")
-
-        metadata = {"cwd": cwd, **(workspace_metadata or {})}
-        materialization_input = _materialization_input_for_anchor(
-            base_events,
-            anchor_id=anchor_id,
-            intent=intent,
-            workspace_metadata=metadata,
-        )
-        try:
-            materialization = _normalize_thread_materialization(
-                self.codex_threads.materialize_thread(
-                    cwd=cwd,
-                    anchor_id=anchor_id,
-                    intent=materialization_input,
-                )
-            )
-        except Exception as exc:
-            error = {"type": type(exc).__name__, "message": str(exc)}
-            failed_events = materialize_thread_binding_failed_events(
-                base_events,
-                session_id=session_id,
-                tape_id=tape_id,
-                intent=intent,
-                workspace_metadata=metadata,
-                anchor_id=anchor_id,
-                reason=reason,
-                error=error,
-            )
-            self.tape_store.append_many(failed_events)
-            return RuntimeStartResult(
-                status="bind_failed",
-                resolution=resolution,
-                anchor_id=anchor_id,
-                thread_id=None,
-                appended_events=(*already_appended, *failed_events),
-                error=error,
-            )
-
-        binding_events = materialize_thread_binding_events(
-            base_events,
-            session_id=session_id,
-            tape_id=tape_id,
-            thread_id=materialization.thread_id,
-            intent=intent,
-            workspace_metadata=metadata,
-            anchor_id=anchor_id,
-            reason=reason,
-            materialization_turn_id=materialization.turn_id,
-        )
-        materialized_event = binding_events[0]
-        bound_event = binding_events[1]
-        materialization_facts = _facts_from_materialization_notifications(materialization)
-        materialization_events = project_thread_materialization_events(
-            materialization_facts,
-            session_id=session_id,
-            tape_id=tape_id,
-            anchor_id=anchor_id,
-            materialization_id=str(materialized_event.payload.get("materialization_id")),
-            materialization_turn_id=materialization.turn_id,
-        )
-        appended_events = (*already_appended, materialized_event, *materialization_events, bound_event)
-        self.tape_store.append_many([materialized_event, *materialization_events, bound_event])
-        return RuntimeStartResult(
-            status=status,
-            resolution=resolution,
-            anchor_id=anchor_id,
-            thread_id=materialization.thread_id,
-            appended_events=appended_events,
-        )
-
-
-def _latest_anchor_id(events: list[TapeEvent]) -> str | None:
-    for event in reversed(events):
-        if event.type == "bub.anchor.created" and event.anchor_id:
-            return event.anchor_id
-    return None
-
-
-def _materialization_input_for_anchor(
-    events: list[TapeEvent],
-    *,
-    anchor_id: str,
-    intent: str,
-    workspace_metadata: JsonObject,
-) -> str:
-    anchor = find_anchor_created(events, anchor_id)
-    if anchor is None:
-        raise RuntimeError("cannot materialize thread without a committed Anchor")
-    return build_initial_input(
-        anchor=anchor,
-        intent=intent,
-        selected_refs=select_context_refs(events, anchor, recent_event_limit=8),
-        workspace_metadata=workspace_metadata,
-    )
-
-
-def _normalize_thread_materialization(value: str | ThreadMaterialization) -> ThreadMaterialization:
-    if isinstance(value, ThreadMaterialization):
-        return value
-    return ThreadMaterialization(thread_id=value)
-
-
-def _facts_from_materialization_notifications(materialization: ThreadMaterialization):
-    facts = []
-    for record in materialization.notification_records:
-        facts.extend(
-            facts_from_notification_record(
-                {
-                    **record,
-                    "turn_id": materialization.turn_id,
-                },
-                source="sdk_stream:thread_materialization",
-            )
-        )
-    return facts
-
 
 def _facts_from_turn_notifications(turn: CodexTurn):
     facts = []
@@ -333,3 +104,14 @@ def _facts_from_turn_notifications(turn: CodexTurn):
             )
         )
     return facts
+
+
+__all__ = [
+    "BubCodexRuntime",
+    "CodexThreadService",
+    "ContextUnavailable",
+    "ExecutableContext",
+    "RuntimeContext",
+    "RuntimeStartResult",
+    "RuntimeTurnResult",
+]

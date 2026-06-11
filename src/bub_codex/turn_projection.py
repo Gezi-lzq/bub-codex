@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Iterable
 
 from .runtime_adapter import CodexFact
+from .compact_projection import project_codex_facts_to_tape_events
 from .tape_events import (
     JsonObject,
     TapeEvent,
     make_tape_event,
-    project_codex_facts_to_tape_events,
 )
 from .tool_projection import project_tool_event
 

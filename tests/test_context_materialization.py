@@ -10,10 +10,10 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex.context_materialization import build_initial_input, materialize_thread_binding_events  # noqa: E402
 from bub_codex.runtime import BubCodexRuntime  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from bub_codex.tape_events import make_tape_event  # noqa: E402
+from bub_codex.new_thread_materialization import build_initial_input, materialize_thread_binding_events  # noqa: E402
 
 
 class ContextMaterializationTest(unittest.TestCase):
@@ -81,7 +81,7 @@ class ContextMaterializationTest(unittest.TestCase):
         thread_service = CapturingThreadService()
         runtime = BubCodexRuntime(store, thread_service)
 
-        result = runtime.ensure_thread_context(
+        result = runtime.context_kernel.ensure_thread_context(
             session_id="s1",
             tape_id="s1",
             cwd="/workspace",

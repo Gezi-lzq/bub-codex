@@ -11,7 +11,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex.tape_events import load_facts_jsonl, project_codex_facts_to_tape_events
+from bub_codex.compact_projection import project_codex_facts_to_tape_events
+from bub_codex.tape_events import load_facts_jsonl
 
 
 def main() -> None:

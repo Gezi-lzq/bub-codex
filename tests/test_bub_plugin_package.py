@@ -356,7 +356,7 @@ class BubPluginPackageTest(unittest.TestCase):
             codex_client_factory=FakeCodexClient,
         )
 
-        self.assertIsInstance(service.runtime.tape_store, RepublicTapeStoreAdapter)
+        self.assertIsInstance(service.tape_store, RepublicTapeStoreAdapter)
 
     def test_runtime_can_explicitly_disable_bub_tape_store_for_tests(self) -> None:
         class FakeTapeStore:
@@ -377,7 +377,35 @@ class BubPluginPackageTest(unittest.TestCase):
             codex_client_factory=FakeCodexClient,
         )
 
-        self.assertIsInstance(service.runtime.tape_store, InMemoryTapeStore)
+        self.assertIsInstance(service.tape_store, InMemoryTapeStore)
+
+    def test_runtime_fails_fast_for_async_bub_tape_store(self) -> None:
+        class FakeAsyncTapeStore:
+            pass
+
+        framework = SimpleNamespace(
+            workspace=ROOT,
+            get_tape_store=lambda: FakeAsyncTapeStore(),
+        )
+        settings = BubCodexSettings(
+            codex_bin=ROOT / "codex",
+        )
+        built_clients: list[FakeCodexClient] = []
+
+        def fake_codex_client_factory(*, config):
+            client = FakeCodexClient(config=config)
+            built_clients.append(client)
+            return client
+
+        with patch("bub_codex.runtime_services.is_async_tape_store", lambda store: True):
+            with self.assertRaisesRegex(RuntimeError, "does not support async Republic tape stores"):
+                build_runtime_stream_service(
+                    framework,
+                    settings=settings,
+                    codex_config_factory=FakeCodexConfig,
+                    codex_client_factory=fake_codex_client_factory,
+                )
+        self.assertEqual(built_clients, [])
 
 
 class FakeRuntimeStreamService:

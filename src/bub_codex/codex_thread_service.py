@@ -26,6 +26,29 @@ class CodexTurn:
     notification_records: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
+@dataclass(slots=True)
+class CodexTurnSession:
+    client: Any
+    turn_id: str
+    thread_id: str
+
+    def records(self) -> Iterator[dict[str, Any]]:
+        while True:
+            event = self.client.next_turn_notification(self.turn_id)
+            record = {
+                **_notification_record(event),
+                "turn_id": self.turn_id,
+            }
+            if not record_belongs_to_thread(record, self.thread_id):
+                continue
+            yield record
+            if record["method"] == "turn/completed":
+                break
+
+    def close(self) -> None:
+        self.client.unregister_turn_notifications(self.turn_id)
+
+
 class LowLevelCodexThreadService:
     """Codex thread lifecycle adapter backed by the low-level Python SDK client.
 
@@ -175,29 +198,19 @@ class MaterializingCodexThreadService:
             notification_records=tuple(notification_records),
         )
 
-    def run_turn_stream_records(
+    def start_turn_stream(
         self,
         *,
         thread_id: str,
         cwd: str,
         prompt: str,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> CodexTurnSession:
         turn = self._client.turn_start(thread_id, prompt, {"cwd": cwd})
-        turn_id = turn.turn.id
-        try:
-            while True:
-                event = self._client.next_turn_notification(turn_id)
-                record = {
-                    **_notification_record(event),
-                    "turn_id": turn_id,
-                }
-                if not record_belongs_to_thread(record, thread_id):
-                    continue
-                yield record
-                if record["method"] == "turn/completed":
-                    break
-        finally:
-            self._client.unregister_turn_notifications(turn_id)
+        return CodexTurnSession(
+            client=self._client,
+            turn_id=str(turn.turn.id),
+            thread_id=thread_id,
+        )
 
 
 def _default_initial_prompt(anchor_id: str, materialized_context: str) -> str:

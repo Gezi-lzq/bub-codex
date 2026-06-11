@@ -56,13 +56,13 @@ def main() -> None:
     threads = FakeCodexThreadService()
     runtime = BubCodexRuntime(store, threads)
 
-    first = runtime.ensure_thread_context(
+    first = runtime.context_kernel.ensure_thread_context(
         session_id="runtime-spike-session",
         tape_id="runtime-spike-tape",
         cwd=str(ROOT),
         intent="Start the runtime facade spike.",
     )
-    second = runtime.ensure_thread_context(
+    second = runtime.context_kernel.ensure_thread_context(
         session_id="runtime-spike-session",
         tape_id="runtime-spike-tape",
         cwd=str(ROOT),
@@ -72,13 +72,13 @@ def main() -> None:
     failed_store = InMemoryTapeStore()
     failing_threads = FakeCodexThreadService(fail_next_create=True)
     failing_runtime = BubCodexRuntime(failed_store, failing_threads)
-    failed = failing_runtime.ensure_thread_context(
+    failed = failing_runtime.context_kernel.ensure_thread_context(
         session_id="runtime-failure-session",
         tape_id="runtime-failure-tape",
         cwd=str(ROOT),
         intent="Start and simulate thread bind failure.",
     )
-    retry = failing_runtime.ensure_thread_context(
+    retry = failing_runtime.context_kernel.ensure_thread_context(
         session_id="runtime-failure-session",
         tape_id="runtime-failure-tape",
         cwd=str(ROOT),

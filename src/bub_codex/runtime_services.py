@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from republic import AsyncStreamEvents, StreamState
+from republic.tape.store import is_async_tape_store
 
 from bub.types import State
 
@@ -172,6 +173,8 @@ def build_runtime_stream_service(
     if settings.sdk_python_path is not None:
         sys.path.insert(0, str(settings.sdk_python_path))
 
+    tape_store = runtime_tape_store(framework, settings)
+
     if codex_config_factory is None or codex_client_factory is None:
         try:
             from openai_codex.client import CodexClient, CodexConfig
@@ -199,9 +202,8 @@ def build_runtime_stream_service(
         approval_policy=settings.approval_policy,
         sandbox=settings.sandbox,
     )
-    tape_store = runtime_tape_store(framework, settings)
     runtime = BubCodexRuntime(tape_store, codex_threads)
-    return BubCodexLiveRuntimeStreamService(runtime, codex_threads)
+    return BubCodexLiveRuntimeStreamService(runtime.context_kernel, tape_store, codex_threads)
 
 
 def stream_runtime_turn_result(result: RuntimeTurnResult) -> AsyncStreamEvents:
@@ -228,6 +230,11 @@ def runtime_tape_store(framework: Any, settings: BubCodexSettings):
     if settings.use_bub_tape_store and hasattr(framework, "get_tape_store"):
         tape_store = framework.get_tape_store()
         if tape_store is not None:
+            if is_async_tape_store(tape_store):
+                raise RuntimeError(
+                    "bub-codex live runtime does not support async Republic tape stores yet; "
+                    "use a sync-compatible Bub tape store until RuntimeTape async support lands"
+                )
             return RepublicTapeStoreAdapter(tape_store)
     return InMemoryTapeStore()
 

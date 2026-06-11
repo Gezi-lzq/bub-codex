@@ -104,7 +104,7 @@ def main() -> None:
             )
         runtime = BubCodexRuntime(store, thread_service)
 
-        first = runtime.ensure_thread_context(
+        first = runtime.context_kernel.ensure_thread_context(
             session_id=args.session_id,
             tape_id=args.tape_id,
             cwd=str(args.workspace),
@@ -122,7 +122,7 @@ def main() -> None:
                 sandbox=args.sandbox,
             )
             second_runtime = BubCodexRuntime(store, second_thread_service)
-            second = second_runtime.ensure_thread_context(
+            second = second_runtime.context_kernel.ensure_thread_context(
                 session_id=args.session_id,
                 tape_id=args.tape_id,
                 cwd=str(args.workspace),
@@ -146,7 +146,7 @@ def main() -> None:
             second_error = None
             second_read = None
             try:
-                second = second_runtime.ensure_thread_context(
+                second = second_runtime.context_kernel.ensure_thread_context(
                     session_id=args.session_id,
                     tape_id=args.tape_id,
                     cwd=str(args.workspace),

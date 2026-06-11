@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Protocol
 
-from .context_materialization import active_thread_id_for_anchor, latest_anchor_created
 from .runtime_resolution import RuntimeContextResolution, resolve_runtime_context
 from .tape_events import TapeEvent
+from .new_thread_materialization import active_thread_id_for_anchor, latest_anchor_created
 
 
 class TapeStore(Protocol):
