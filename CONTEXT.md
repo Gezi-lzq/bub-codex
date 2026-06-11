@@ -47,29 +47,35 @@ Out of scope for the initial scaffold:
 - Importing all of `bub-contrib` into this repository.
 - Designing a full approval UX or policy engine. The initial runtime should assume maximum local permissions.
 
-## Current Spike Status
+## Current Status
 
-The current implementation is a validated spike prototype, not an MVP.
+The current implementation is an MVP candidate skeleton, not a release-ready MVP.
 
 Validated:
 
+- Bub can discover the installed `bub-codex` package entry point.
+- `BubCodexPlugin` exposes the MVP `run_model_stream` hook and delegates comma commands back to Bub builtin behavior.
+- The MVP plugin entry point constructs the live notification bridge rather than using the batch/reference runtime as fallback.
 - Real Codex SDK turns can be run from the Bub plugin/runtime path.
 - Codex raw notifications can be normalized into `CodexFact`.
 - `CodexFact` can be projected into Bub tape events for assistant messages, command executions, command failures, file changes, Anchor bootstrap, thread materialization, and turn lifecycle.
-- Tape event ordering now follows Codex notification source order.
-- Real smoke artifacts exist for simple final-answer turns, command/tool turns, Fibonacci file creation, and raw-notification mapping.
+- Tape event ordering follows Codex notification source order.
+- Bub/Republic `FileTapeStore` persisted entries can be read back through `RepublicTapeStoreAdapter` and used to derive runtime context from tape.
+- Live bridge tests cover bootstrap, latest Anchor without thread binding, existing thread resume, resume failure, current-thread notification filtering, runtime diagnostic error events, compaction Anchor projection, and final-answer stream behavior.
+- Real smoke artifacts exist for simple final-answer turns, command/tool turns, Fibonacci file creation, raw-notification mapping, and two-turn live resume from the same tape-derived Codex thread binding.
 
-Still spike-shaped:
+Still not release-ready:
 
-- Most executable proof lives under `scripts/spikes/*`.
-- The tape store is still `InMemoryTapeStore`.
+- Real SDK smoke tests remain manual and external-runtime dependent.
 - `BubCodexRuntime.run_turn()` still batches notifications until `turn/completed`; this is a reference/spike path for validating runtime and projection rules, not the MVP production stream path.
-- Real SDK smoke tests are manual and external-runtime dependent.
-- There is no installable/configurable Bub plugin MVP yet.
+- Async Republic tape stores are detected but not supported from an already-running event loop.
+- Post-MVP runtime hardening, especially `CodexEnvironment`, app-server lifecycle diagnostics, managed Codex config blocks, and richer liveness data, is still open.
+- Approval UX and policy governance are intentionally out of scope for v0.
 
 Representative research summary:
 
 - [Validated Spike Summary](docs/research/2026-06-11-validated-spike-summary.md)
+- [MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md)
 
 ## Current Decisions
 
@@ -111,9 +117,9 @@ Representative research summary:
 - The first Bub plugin integration should implement `run_model_stream` only, delegate comma commands back to the builtin agent, avoid overriding `load_state` / `build_prompt` / outbound hooks, use Bub `REGISTRY` as the tool source, and let HookRuntime consume the stream for non-streaming calls.
 - `src/bub_codex/plugin.py` now provides the minimal `BubCodexPlugin` skeleton. It exposes only `run_model_stream`, delegates comma commands to `state["_runtime_agent"].run(...)`, and delegates normal prompts to an injected `RuntimeStreamService`.
 - `BubCodexRuntimeStreamService` connects `BubCodexPlugin` to `BubCodexRuntime.run_turn()` for reference/spike tests. It is not the MVP production runtime path; when it emits Bub stream events, it reuses the Codex turn Translator's final-answer semantics so batch/reference behavior does not diverge from the live bridge.
-- Codex SDK supports live turn notification streaming; the current `BubCodexRuntime.run_turn()` path intentionally batches notifications until `turn/completed` only as a temporary adapter shape for validating projection rules. A Bub-native coding runtime should grow a live notification bridge that consumes Codex events as they arrive, appends tape events in source order, and yields Bub stream/progress events without waiting for the whole turn to finish.
+- Codex SDK supports live turn notification streaming. The current MVP plugin path uses the live bridge; `BubCodexRuntime.run_turn()` intentionally remains a batch/reference path for validating projection rules and keeping non-stream tests simple.
 - `agentMessage` items carry `phase=commentary | final_answer | null` from Codex. `phase=final_answer` is a Codex-provided semantic marker, not inferred by Bub. Tape should preserve all assistant message completions in order, while Bub `final.text` should prefer `phase=final_answer` and fall back to the last assistant message if no final-answer phase is available.
-- `BubCodexLiveRuntimeStreamService` is the first live notification bridge spike. It reuses `ensure_thread_context()`, consumes ordinary user-turn notification records as they arrive, appends projected tape events immediately in source order, keeps `phase=commentary` out of `StreamEvent("text")`, and emits `phase=final_answer` as Bub `text` and `final.text`. This validates the live bridge direction but does not yet replace the default batch service as production runtime.
+- `BubCodexLiveRuntimeStreamService` is the MVP live notification bridge. It reuses `ensure_thread_context()`, consumes ordinary user-turn notification records as they arrive, appends projected tape events immediately in source order, keeps `phase=commentary` out of `StreamEvent("text")`, and emits `phase=final_answer` as Bub `text` and `final.text`.
 - Current-thread notification filtering 属于 Codex stream 输入边界，而不是 Translator 语义投影层。`MaterializingCodexThreadService` 会忽略 `threadId` 不等于当前 thread 的 notification，避免 foreign `turn/completed` 结束当前 turn；`BubCodexLiveRuntimeStreamService` 也会防御性过滤 foreign-thread records，确保背景 thread / subagent notification 不进入当前 Bub tape。缺失 `threadId` 的 notification 暂时保留给 Translator 处理。
 - MVP 使用最小 tape-side runtime diagnostic event：`bub.runtime.error`。它记录 Bub/Codex runtime 边界失败，而不是模型语义事件；v0 payload 只包含 `stage`、`error_type`、`message` 和 tape event 顶层的 session/tape/anchor/thread/turn refs。`thread_resume` failure 和 live `turn_stream` failure 会写该事件并继续通过 Bub stream 返回 `error/text/final`。`codex_version`、`stderr_tail`、`last_semantic_activity`、环境快照等诊断字段推迟到 runtime hardening 阶段。
 - MVP 必须按 Bub plugin package 规范收敛：`pyproject.toml` 注册 `[project.entry-points."bub"]`，入口为可调用工厂 `bub_codex.plugin:create_plugin`，插件安装到运行 Bub 的同一 Python 环境中，由 Bub entry point loader 加载。

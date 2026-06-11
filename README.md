@@ -36,19 +36,23 @@ That implies:
 
 ## Repository Status
 
-This repository currently contains a validated spike prototype, not an MVP.
+This repository currently contains an MVP candidate skeleton, not a
+release-ready MVP.
 
-The real Codex SDK path has been exercised through spike scripts: Codex
-notifications can be normalized into adapter facts, projected into Bub tape
-events, and surfaced through Bub/Republic stream events. Real smoke tests have
-covered assistant messages, command execution, command failure/retry, file
-changes, Anchor bootstrap, thread materialization, and turn completion.
+The package now has a Bub plugin entry point, Bub config wiring, a live
+`run_model_stream` bridge, Bub/Republic tape store integration, current-thread
+notification filtering, minimal runtime diagnostic events, and tests for Anchor
+bootstrap, thread materialization, resume, compaction Anchor projection, and
+stream final-answer behavior.
 
-The implementation is still spike-shaped: it uses `scripts/spikes/*`,
-`InMemoryTapeStore`, manual smoke artifacts, and temporary batch collection of
-Codex notifications. A product MVP still needs a formal package entrypoint,
-configuration, real Bub TapeService integration, a live notification bridge, and
-stable test coverage.
+Real Codex SDK smoke tests have covered assistant messages, command execution,
+command failure/retry, file changes, Anchor bootstrap, thread materialization,
+turn completion, and two-turn live resume from the same tape-derived thread
+binding. These remain manual checks because they depend on the external Codex
+runtime and model behavior.
+
+Current release readiness is tracked in
+[MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md).
 
 ## Bub Plugin Package
 
