@@ -28,7 +28,7 @@ plugin:
 Install from this repository into the same Python environment that runs Bub:
 
 ```bash
-uv pip install "git+https://github.com/<owner>/bub-codex.git"
+uv pip install "git+https://github.com/Gezi-lzq/bub-codex.git"
 ```
 
 For local development:
@@ -42,6 +42,14 @@ Bub:
 
 ```bash
 bub install bub-codex@main
+```
+
+Bub loads plugins from the current Python environment through the `bub` entry
+point group. For this package, the entry point is:
+
+```toml
+[project.entry-points."bub"]
+codex = "bub_codex.plugin:create_plugin"
 ```
 
 ## Prerequisites
@@ -137,7 +145,15 @@ See [docs/design.md](docs/design.md) for the architecture and event model.
 
 ## Verification
 
-Verify plugin discovery:
+Verify that Bub loaded the plugin by checking the hook report:
+
+```bash
+uv run bub hooks
+```
+
+The report should include `codex` under `run_model_stream`.
+
+This repository also includes a focused discovery check:
 
 ```bash
 BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
