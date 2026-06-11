@@ -126,6 +126,7 @@ Representative research summary:
 - MVP runtime 优先接入 Bub/Republic tape store，并通过 `RepublicTapeStoreAdapter` 只还原 `bub-codex` 自己写入的事件；`InMemoryTapeStore` 仅用于测试、spike 或显式禁用 Bub tape store 的开发场景。
 - `RepublicTapeStoreAdapter` 已通过 Bub `FileTapeStore` 持久化读回测试，可从真实 Republic tape entries 还原 `bub-codex` 事件并仅从 tape 推导 `resume_thread` runtime context。
 - Resume existing Codex thread 的 MVP 语义已有 live bridge 测试：当 tape 中存在 latest Anchor 与 `codex.thread.bound`，runtime 不 materialize 新 thread，而是调用 `resume_thread(thread_id)` 后继续 ordinary turn。
+- 真实 Codex SDK live resume smoke 已通过：`scripts/spikes/real_codex_resume_smoke.py` 会用第一轮 live bridge 创建 Anchor/thread binding，再用新的 `CodexClient` 和同一 tape store 运行第二轮，断言第二轮 resume 同一个 thread、没有新的 materialization/binding。最近 artifact：`artifacts/spikes/real-codex-resume-smoke-20260611-160011/result.json`。
 - Codex stream 中的 `contextCompaction` completed item 会投影为 `codex.thread.compacted` 与新的 `bub.anchor.created(method=compact, reason=auto_compact, initiator=codex_runtime)`。
 - Codex turn Translator 的外部 Interface 应输入 raw Codex notification record，并在 Implementation 内部拥有 `raw notification -> CodexFact -> TapeEvent -> Bub stream decision` 的解释链。这样 `live_stream` 不需要知道 Codex raw shape、adapter fact 中间形态或 final-answer collection 规则，保持高内聚。
 - Codex turn Translator 的输出 Interface 应是 `TapeEvent[] + StreamDecision[]`，而不是直接输出 Republic `StreamEvent`。Translator 负责语义决策，`live_stream` 负责把 `StreamDecision` 转成 Bub/Republic transport object。

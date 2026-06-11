@@ -108,3 +108,13 @@ codex:
 runtime 不可用，插件会返回明确的 `bub-codex runtime is not configured`
 错误。MVP 生产路径不引入 batch fallback；逗号命令仍委托给 Bub builtin
 agent。
+
+真实 Codex SDK resume smoke 保持为手动检查，不进入默认单元测试：
+
+```bash
+python scripts/spikes/real_codex_resume_smoke.py
+```
+
+该脚本会运行两轮 live bridge turn，复用同一个 tape store，并断言第二轮
+resume 第一轮绑定的 Codex thread，没有创建 replacement thread。结果写入
+`artifacts/spikes/real-codex-resume-smoke-*/result.json`。

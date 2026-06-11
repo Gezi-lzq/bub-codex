@@ -155,12 +155,12 @@ tests/test_live_stream.py
   test_live_bridge_surfaces_resume_failure_without_materializing_replacement
 ```
 
-但还缺：
+已补：
 
-- real SDK two-turn resume smoke。
-- resume failure 的 stream error payload / tape error semantics 明确化。
+- real SDK two-turn resume smoke：`scripts/spikes/real_codex_resume_smoke.py`。
+- resume failure 的 stream error payload / tape error semantics：`bub.runtime.error`。
 
-PRD 要求 resume failure 不自动创建 replacement thread。实现层 `BubCodexRuntime.ensure_thread_context()` 会直接抛出 `resume_thread()` 异常，live bridge 会转成 stream error。这条主语义成立，但测试不够直接。
+PRD 要求 resume failure 不自动创建 replacement thread。实现层 `BubCodexRuntime.ensure_thread_context()` 会记录 `bub.runtime.error` 后继续抛出 `resume_thread()` 异常，live bridge 会转成 stream error。这条主语义已有 fake live bridge 测试覆盖。
 
 ### Latest Anchor without binding materializes new thread
 
@@ -317,9 +317,13 @@ MVP 可以先只补 stream boundary 测试，不强制 tape error schema；但 r
 
 ### P1: real SDK resume smoke
 
-当前真实 smoke 多为 single-session turn。
+已补手动 smoke：
 
-需要一个手动 spike：
+```text
+scripts/spikes/real_codex_resume_smoke.py
+```
+
+脚本验证：
 
 ```text
 turn 1 creates thread and writes tape
@@ -329,6 +333,12 @@ assert no new materialization
 ```
 
 这对 MVP 信心很关键，但因为真实 SDK/model 成本，不建议进默认 unit suite。
+
+最近 artifact：
+
+```text
+artifacts/spikes/real-codex-resume-smoke-20260611-160011/result.json
+```
 
 ### P2: README status update
 
