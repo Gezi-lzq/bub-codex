@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -35,7 +36,7 @@ class RepublicTapeStoreAdapter:
         return [
             event
             for event in self._read_tape_events(tape_id)
-            if session_id is None or event.session_id == session_id
+            if session_id is None or event.session_id in (session_id, None)
         ]
 
     def resolve_runtime_context(
@@ -61,6 +62,8 @@ class RepublicTapeStoreAdapter:
         events: list[TapeEvent] = []
         for entry in entries:
             if entry.meta.get(BUB_CODEX_META_KEY) != BUB_CODEX_META_VALUE:
+                if native_anchor := _native_anchor_event(entry, tape_id=tape_id):
+                    events.append(native_anchor)
                 continue
             payload = entry.payload
             data = payload.get("data") if isinstance(payload, dict) else None
@@ -94,6 +97,45 @@ def _event_from_json(data: dict[str, Any]) -> TapeEvent:
         thread_id=_optional_str(data.get("thread_id")),
         turn_id=_optional_str(data.get("turn_id")),
     )
+
+
+def _native_anchor_event(entry: TapeEntry, *, tape_id: str) -> TapeEvent | None:
+    if entry.kind != "anchor" or not isinstance(entry.payload, dict):
+        return None
+    name = str(entry.payload.get("name") or "anchor")
+    state = entry.payload.get("state")
+    if not isinstance(state, dict):
+        state = {}
+    occurred_at = _optional_str(getattr(entry, "date", None))
+    source_entry_id = str(getattr(entry, "id", ""))
+    anchor_id = _native_anchor_id(tape_id=tape_id, source_entry_id=source_entry_id, name=name, occurred_at=occurred_at)
+    payload = {
+        "anchor_id": anchor_id,
+        "method": "bub_handoff",
+        "reason": name,
+        "state": state,
+        "refs": {"source_entry_id": source_entry_id},
+        "initiator": "bub_builtin",
+    }
+    return TapeEvent(
+        type="bub.anchor.created",
+        event_id=_native_anchor_id(
+            tape_id=tape_id,
+            source_entry_id=source_entry_id,
+            name=f"event:{name}",
+            occurred_at=occurred_at,
+        ),
+        payload=payload,
+        occurred_at=occurred_at,
+        session_id=None,
+        tape_id=tape_id,
+        anchor_id=anchor_id,
+    )
+
+
+def _native_anchor_id(*, tape_id: str, source_entry_id: str, name: str, occurred_at: str | None) -> str:
+    body = "|".join((tape_id, source_entry_id, name, occurred_at or ""))
+    return "anchor_" + hashlib.sha256(body.encode("utf-8")).hexdigest()[:24]
 
 
 def _run_awaitable(awaitable):

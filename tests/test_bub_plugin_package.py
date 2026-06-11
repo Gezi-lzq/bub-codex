@@ -22,6 +22,7 @@ from bub_codex.runtime_services import LazyRuntimeStreamService  # noqa: E402
 from bub_codex.runtime_services import RuntimeCacheKey  # noqa: E402
 from bub_codex.runtime_services import build_runtime_stream_service  # noqa: E402
 from bub_codex.runtime_services import runtime_cache_key  # noqa: E402
+from bub_codex.stream_utils import default_tape_id  # noqa: E402
 from bub_codex.stream_utils import stream_text  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 
@@ -54,6 +55,17 @@ class BubPluginPackageTest(unittest.TestCase):
         self.assertEqual(getattr(BubCodexSettings, "__config_name__"), "codex")
         self.assertIn(BubCodexSettings, CONFIG_MAP["codex"])
 
+    def test_default_tape_id_matches_bub_builtin_session_tape_name(self) -> None:
+        import hashlib
+
+        session_id = "test-codex-chat"
+        workspace_hash = hashlib.md5(str(ROOT.resolve()).encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        session_hash = hashlib.md5(session_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+        tape_id = default_tape_id(session_id, {"_runtime_workspace": str(ROOT)})
+
+        self.assertEqual(tape_id, f"{workspace_hash}__{session_hash}")
+
     def test_bub_framework_loads_package_entry_point_and_runs_stream_hook(self) -> None:
         framework = BubFramework()
         entry_point = SimpleNamespace(
@@ -81,6 +93,30 @@ class BubPluginPackageTest(unittest.TestCase):
             self.assertTrue(framework._plugin_status["codex"].is_success)
             self.assertIn("codex", report["run_model_stream"])
             self.assertEqual(text, "package lifecycle ok")
+
+    def test_comma_handoff_records_anchor_in_codex_runtime_tape(self) -> None:
+        store = InMemoryTapeStore()
+        runtime = SimpleNamespace(tape_store=store)
+        plugin = BubCodexPlugin(runtime)
+        state = {
+            "_runtime_workspace": str(ROOT),
+            "_runtime_agent": FakeAgent("anchor added: handoff"),
+        }
+
+        stream = asyncio.run(
+            plugin.run_model_stream(
+                prompt=',tape.handoff name=handoff summary="new context"',
+                session_id="s1",
+                state=state,
+            )
+        )
+        text = asyncio.run(_collect_text(stream))
+        events = store.events(session_id="s1", tape_id=default_tape_id("s1", state))
+
+        self.assertEqual(text, "anchor added: handoff")
+        self.assertEqual([event.type for event in events], ["bub.anchor.creation.started", "bub.anchor.created"])
+        self.assertEqual(events[-1].payload["reason"], "handoff")
+        self.assertEqual(events[-1].payload["state"]["summary"], "new context")
 
     def test_plugin_binds_bub_tape_store_at_run_time_not_load_time(self) -> None:
         class FakeTapeStore:
@@ -357,6 +393,10 @@ class BubPluginPackageTest(unittest.TestCase):
         )
 
         self.assertIsInstance(service.tape_store, RepublicTapeStoreAdapter)
+        self.assertIsNotNone(service.tool_runtime_context)
+        self.assertIsNotNone(service.codex_turn_streams._client.approval_handler)
+        dynamic_tool_names = [tool.name for tool in service.codex_turn_streams._dynamic_tools]
+        self.assertEqual(dynamic_tool_names, ["tape_info", "tape_search", "tape_anchors", "tape_handoff"])
 
     def test_runtime_can_explicitly_disable_bub_tape_store_for_tests(self) -> None:
         class FakeTapeStore:
@@ -420,6 +460,16 @@ class FakeRuntimeStreamService:
         self.closed = True
 
 
+class FakeAgent:
+    def __init__(self, result: str) -> None:
+        self.result = result
+        self.calls = []
+
+    async def run(self, *, session_id, prompt, state):
+        self.calls.append((session_id, prompt, state))
+        return self.result
+
+
 class FailingRuntimeStreamService(FakeRuntimeStreamService):
     async def run_stream(self, *, prompt, session_id, state):
         raise RuntimeError("stream failed before returning events")
@@ -439,8 +489,9 @@ class FakeCodexConfig:
 
 
 class FakeCodexClient:
-    def __init__(self, *, config):
+    def __init__(self, *, config, approval_handler=None):
         self.config = config
+        self.approval_handler = approval_handler
 
     def start(self) -> None:
         pass

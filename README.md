@@ -17,6 +17,7 @@ live `run_model_stream` through the Codex SDK and stores continuity in Bub tape.
 - Codex thread resume from Bub tape history
 - Codex compaction recorded as Bub Anchors
 - Bub comma-command delegation back to the builtin Bub agent
+- Bub tape tools exposed to Codex as dynamic tools
 
 ## Installation
 
@@ -85,6 +86,14 @@ uv run bub --workspace /path/to/workspace chat --session-id my-session
 
 Normal chat turns are handled by Codex. Bub comma commands, such as `,help`, are
 still handled by Bub.
+
+`tape.handoff` is supported from both sides:
+
+- user command: `,tape.handoff name=handoff summary="new context"`
+- Codex dynamic tool: `bub.tape_handoff`
+
+Both paths create a Bub Anchor. The next normal chat turn materializes a new
+Codex thread from that Anchor and binds it in tape.
 
 ## Behavior
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -11,6 +12,7 @@ from bub.types import State
 
 from .codex_thread_service import MaterializingCodexThreadService
 from .config import BubCodexSettings, load_settings
+from .bub_tools import BubToolRuntimeContext, build_bub_dynamic_tool_provider
 from .republic_tape_store import RepublicTapeStoreAdapter
 from .runtime import BubCodexRuntime, RuntimeTurnResult
 from .stream_utils import default_tape_id, prompt_text, stream_text, to_stream_event
@@ -192,7 +194,16 @@ def build_runtime_stream_service(
         env=dict(settings.env) or None,
         experimental_api=True,
     )
-    client = codex_client_factory(config=client_config)
+    tool_runtime_context = BubToolRuntimeContext()
+    dynamic_tool_provider = build_bub_dynamic_tool_provider(
+        _model_visible_bub_tape_tools(),
+        context_factory=tool_runtime_context.context_for_call,
+    )
+    client = _build_codex_client(
+        codex_client_factory,
+        config=client_config,
+        approval_handler=dynamic_tool_provider.dispatcher.handle_server_request,
+    )
     client.start()
     client.initialize()
 
@@ -201,9 +212,15 @@ def build_runtime_stream_service(
         cwd=str(workspace),
         approval_policy=settings.approval_policy,
         sandbox=settings.sandbox,
+        dynamic_tools=dynamic_tool_provider.specs,
     )
     runtime = BubCodexRuntime(tape_store, codex_threads)
-    return BubCodexLiveRuntimeStreamService(runtime.context_kernel, tape_store, codex_threads)
+    return BubCodexLiveRuntimeStreamService(
+        runtime.context_kernel,
+        tape_store,
+        codex_threads,
+        tool_runtime_context=tool_runtime_context,
+    )
 
 
 def stream_runtime_turn_result(result: RuntimeTurnResult) -> AsyncStreamEvents:
@@ -257,3 +274,23 @@ def runtime_cache_key(framework: Any, settings: BubCodexSettings) -> RuntimeCach
         env=tuple(sorted(settings.env.items())),
         use_bub_tape_store=settings.use_bub_tape_store,
     )
+
+
+def _build_codex_client(
+    factory: Callable[..., Any],
+    *,
+    config: Any,
+    approval_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]],
+) -> Any:
+    signature = inspect.signature(factory)
+    if "approval_handler" in signature.parameters:
+        return factory(config=config, approval_handler=approval_handler)
+    return factory(config=config)
+
+
+def _model_visible_bub_tape_tools() -> list[Any]:
+    import bub.builtin.tools  # noqa: F401
+    from bub.tools import REGISTRY
+
+    names = ("tape.info", "tape.search", "tape.anchors", "tape.handoff")
+    return [REGISTRY[name] for name in names if name in REGISTRY]

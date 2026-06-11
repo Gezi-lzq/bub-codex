@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from republic import AsyncStreamEvents, StreamEvent, StreamState
@@ -26,7 +28,15 @@ def stream_text(
 
 
 def default_tape_id(session_id: str, state: State) -> str:
-    return session_id
+    workspace = state.get("_runtime_workspace")
+    if not workspace:
+        return session_id
+    workspace_hash = hashlib.md5(
+        str(Path(str(workspace)).resolve()).encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:16]
+    session_hash = hashlib.md5(session_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+    return f"{workspace_hash}__{session_hash}"
 
 
 def prompt_text(prompt: str | list[dict]) -> str:
@@ -37,4 +47,3 @@ def prompt_text(prompt: str | list[dict]) -> str:
 
 def to_stream_event(decision: StreamDecision) -> StreamEvent:
     return StreamEvent(decision.kind, decision.data)
-

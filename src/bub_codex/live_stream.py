@@ -32,6 +32,7 @@ class BubCodexLiveRuntimeStreamService:
     tape_store: Any
     codex_turn_streams: CodexTurnStreamService
     tape_id_factory: Any | None = None
+    tool_runtime_context: Any | None = None
 
     def close(self) -> None:
         close = getattr(self.codex_turn_streams, "close", None)
@@ -49,6 +50,14 @@ class BubCodexLiveRuntimeStreamService:
         cwd = str(state.get("_runtime_workspace") or ".")
         tape_id_factory = self.tape_id_factory or default_tape_id
         tape_id = str(tape_id_factory(session_id, state))
+        _update_tool_runtime_context(
+            self.tool_runtime_context,
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=None,
+            state=state,
+        )
 
         try:
             context = self.context_kernel.ensure_executable_context(
@@ -63,6 +72,15 @@ class BubCodexLiveRuntimeStreamService:
 
         if isinstance(context, ContextUnavailable):
             return _stream_context_unavailable(context)
+
+        _update_tool_runtime_context(
+            self.tool_runtime_context,
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=context.anchor_id,
+            state=state,
+        )
 
         async def fixed_iterator():
             async for stream_event in _iter_live_turn_events(
@@ -151,3 +169,23 @@ def _stream_context_unavailable(context: ContextUnavailable) -> AsyncStreamEvent
             yield to_stream_event(decision)
 
     return AsyncStreamEvents(iterator(), state=StreamState())
+
+
+def _update_tool_runtime_context(
+    tool_runtime_context: Any | None,
+    *,
+    session_id: str,
+    tape_id: str,
+    cwd: str,
+    anchor_id: str | None,
+    state: State,
+) -> None:
+    update = getattr(tool_runtime_context, "update", None)
+    if callable(update):
+        update(
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=anchor_id,
+            state=state,
+        )

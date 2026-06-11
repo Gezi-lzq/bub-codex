@@ -4,8 +4,9 @@ import asyncio
 import inspect
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -68,6 +69,43 @@ class BubToolInvocationAuditRecord:
 
 
 BubToolInvocationObserver = Callable[[BubToolInvocationAuditRecord], None]
+_ASYNC_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bub-codex-tool")
+
+
+@dataclass(slots=True)
+class BubToolRuntimeContext:
+    """Mutable per-turn context used by Codex dynamic Bub tool calls."""
+
+    session_id: str = ""
+    tape_id: str = ""
+    cwd: str = "."
+    anchor_id: str | None = None
+    state: JsonObject = field(default_factory=dict)
+
+    def update(
+        self,
+        *,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: JsonObject | None = None,
+    ) -> None:
+        self.session_id = session_id
+        self.tape_id = tape_id
+        self.cwd = cwd
+        self.anchor_id = anchor_id
+        self.state = dict(state or {})
+
+    def context_for_call(self, call: DynamicToolCall) -> Any:
+        return make_bub_tool_context(
+            session_id=self.session_id,
+            tape_id=self.tape_id,
+            cwd=self.cwd,
+            call=call,
+            anchor_id=self.anchor_id,
+            extra_state=self.state,
+        )
 
 
 def make_bub_tool_context(
@@ -254,7 +292,7 @@ def _resolve_awaitable(value: Any) -> Any:
     except RuntimeError:
         return asyncio.run(value)
 
-    raise RuntimeError("Cannot run async Bub tool handler while an event loop is already running")
+    return _ASYNC_TOOL_EXECUTOR.submit(asyncio.run, value).result()
 
 
 def _tool_result_to_dynamic_result(value: Any) -> DynamicToolResult:

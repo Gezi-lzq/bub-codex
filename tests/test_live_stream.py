@@ -297,7 +297,12 @@ class LiveStreamTest(unittest.TestCase):
             store.append_many([anchor, binding])
             threads = FakeMaterializingThreadService()
             runtime = BubCodexRuntime(store, threads)
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            live = BubCodexLiveRuntimeStreamService(
+                runtime.context_kernel,
+                store,
+                FakeTurnStreamService(),
+                tape_id_factory=_test_tape_id_factory,
+            )
             result = await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -330,7 +335,12 @@ class LiveStreamTest(unittest.TestCase):
             store.append_many([anchor, binding])
             threads = FakeMaterializingThreadService(fail_resume=True)
             runtime = BubCodexRuntime(store, threads)
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            live = BubCodexLiveRuntimeStreamService(
+                runtime.context_kernel,
+                store,
+                FakeTurnStreamService(),
+                tape_id_factory=_test_tape_id_factory,
+            )
             result = await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -605,3 +615,7 @@ def _thread_bound_event(*, session_id: str, tape_id: str, anchor_id: str, thread
         anchor_id=anchor_id,
         thread_id=thread_id,
     )
+
+
+def _test_tape_id_factory(session_id, state):
+    return session_id

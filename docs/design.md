@@ -92,3 +92,17 @@ Final-answer text is emitted to Bub's stream output.
 When Codex compacts context, `bub-codex` records a Bub Anchor and binds it to the
 same Codex thread. This keeps future resume behavior consistent with normal
 Anchor/thread resolution.
+
+## Bub Tape Tools
+
+`bub-codex` exposes a small set of Bub tape tools to Codex as dynamic tools:
+
+- `bub.tape_info`
+- `bub.tape_search`
+- `bub.tape_anchors`
+- `bub.tape_handoff`
+
+`tape.handoff` is the context-switching tool. When the user runs
+`,tape.handoff` or Codex calls `bub.tape_handoff`, Bub records a new Anchor. On
+the next normal chat turn, `bub-codex` resolves that latest Anchor, creates a new
+Codex thread, and writes the new `codex.thread.bound` event to tape.
