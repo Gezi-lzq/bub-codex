@@ -30,10 +30,16 @@ scripts/spikes/real_bub_cli_research.py
 5. 比较 `~/.bub/tapes/*.jsonl` 前后变化。
 6. 输出 artifact。
 
-最近 artifact：
+初始问题 artifact：
 
 ```text
 artifacts/spikes/real-bub-cli-research-20260611-170333/result.json
+```
+
+修复后 artifact：
+
+```text
+artifacts/spikes/real-bub-cli-research-20260611-173557/result.json
 ```
 
 ## `bub run` 结果
@@ -106,7 +112,7 @@ bub-codex runtime is not configured:
 - Real Bub CLI mode should be exercised end to end to catch differences from mocked transport or replayed anchor flows.
 ```
 
-## 重要发现：真实 CLI 没有持久化 bub-codex tape events
+## 初始重要发现：真实 CLI 没有持久化 bub-codex tape events
 
 虽然 `bub run` 和 `bub chat` 的任务执行成功，但 `~/.bub/tapes/*.jsonl` 没有新增或变化。
 
@@ -147,15 +153,97 @@ bub-codex runtime is not configured:
 
 但从 Bub tape 角度看，这不是已验证的 tape-derived resume。它可能来自 Codex 自身本地 thread state、workspace 文件、或模型推断，而不是 Bub tape canonical state。
 
+## 生命周期选择：与 builtin Agent 保持一致
+
+进一步调研 Bub builtin agent 后，结论是 `bub-codex` 应该选择与 builtin Agent 一致的 lifecycle：
+
+```text
+plugin factory
+  -> 只创建轻量 hook object
+  -> 不启动 CodexClient
+  -> 不固定 tape store
+
+run_model_stream(...)
+  -> 已处于 framework.running()
+  -> framework.get_tape_store() 可用
+  -> 绑定 Bub FileTapeStore
+  -> 创建 runtime service 并执行当前 turn
+```
+
+这个选择不是为了贴合 CLI 的偶然行为，而是贴合 Bub 的核心资源生命周期：
+
+- `framework.load_hooks()` 负责注册 hook。
+- `framework.running()` 负责打开 `provide_tape_store()`。
+- `run_model_stream` 是模型 runtime 真正执行的位置。
+- builtin Agent 也持有 `framework`，并在实际 `run/run_stream` 路径上懒读取 tape store。
+
+因此，`bub-codex.create_plugin()` 不应该 eagerly 调用 `build_runtime_stream_service()`。
+
+## 当前修复：LazyRuntimeStreamService
+
+已将插件入口调整为：
+
+```text
+create_plugin(framework)
+  -> BubCodexPlugin(LazyRuntimeStreamService(framework, settings))
+
+LazyRuntimeStreamService.run_stream(...)
+  -> build_runtime_stream_service(framework, settings)
+  -> runtime.run_stream(...)
+```
+
+这样 `build_runtime_stream_service()` 发生在真实 turn 中，`_runtime_tape_store()` 能拿到 Bub builtin `FileTapeStore`，并通过 `RepublicTapeStoreAdapter` 写入真实 `~/.bub/tapes/*.jsonl`。
+
+修复后，真实 CLI 产生了变化的 tape：
+
+```text
+/Users/gezi/.bub/tapes/bub-codex-real-cli-20260611-173557.jsonl
+```
+
+该 tape 中包含 `bub-codex` events，例如：
+
+```text
+bub.anchor.creation.started
+bub.anchor.created
+bub.context.materialized
+codex.thread.bound
+codex.turn.started
+codex.assistant_message.completed
+codex.turn.completed
+```
+
+同一三轮任务中观察到唯一 `thread_id`：
+
+```text
+019eb609-efe8-7fd1-a3fc-9ac34a4d4738
+```
+
+这说明真实 Bub CLI path 已经从“任务执行成功但 tape 不持久化”，推进到“任务执行成功且 tape-first events 进入 Bub FileTapeStore”。
+
+注意：`real-bub-cli-research-20260611-172908/result.json` 生成时 analyzer 仍读取 `entry.payload.type`，而 Bub tape 实际结构是 `entry.payload.data.type`，所以该旧 artifact 的 `tape_persisted_bub_codex_events=false` 是分析脚本 bug。脚本已修复为读取 `payload.data`；最新 artifact 已直接给出正确分析结果：
+
+```json
+{
+  "changed_tape_count": 1,
+  "tape_persisted_bub_codex_events": true,
+  "suspected_in_memory_tape_store": false,
+  "unique_thread_ids": [
+    "019eb609-efe8-7fd1-a3fc-9ac34a4d4738"
+  ],
+  "runtime_error_count": 0
+}
+```
+
 ## 对当前方案的影响
 
-这个发现不推翻已有 SDK/live bridge spike，但会改变真实 CLI readiness 判断：
+这个发现不推翻已有 SDK/live bridge spike，但修正了真实 CLI readiness 判断：
 
 - 单元测试中的 `BubFramework` fake path 可以验证 adapter 行为。
 - 真实 SDK resume smoke 可以验证 runtime 在同一进程、同一 tape store 下的 resume 语义。
 - 真实 Bub CLI path 暴露了 production integration 差异：runtime service 不能在插件初始化时固定 tape store。
+- 选择 builtin Agent lifecycle 后，真实 CLI path 已经能持久化 `bub-codex` tape events。
 
-因此，真实 CLI 模式不能只看 final text 或 workspace 文件是否正确。release gate 必须同时检查：
+因此，真实 CLI 模式不能只看 final text 或 workspace 文件是否正确。release gate 仍必须同时检查：
 
 ```text
 任务成功
@@ -164,9 +252,9 @@ Bub FileTapeStore 持久化了 bub-codex events
 第二轮从 persisted tape 推导出 same thread_id resume
 ```
 
-## 建议修复方向
+## 已采纳修复方向
 
-需要把 runtime service 构造从 plugin initialization 推迟到 `run_model_stream` 调用期，或让 live stream service 在每轮开始时重新解析当前 `framework.get_tape_store()`：
+runtime service 构造已从 plugin initialization 推迟到 `run_model_stream` 调用期：
 
 ```text
 create_plugin(framework)
@@ -182,13 +270,12 @@ run_model_stream(...)
 
 同时要处理 CodexClient lifecycle：
 
-- 每个 plugin process 一个 client。
-- 或按 turn lazy start client。
-- 需要明确关闭策略，避免 app-server 泄露。
+- 当前 MVP 修复采用按 turn lazy start client，优先保证 tape store 绑定正确。
+- 每个 plugin process 复用一个 client、以及明确关闭策略，作为后续 `CodexEnvironment` / lifecycle hardening 议题处理。
 
-## 建议新增 issue
+## 对 issue 的处理
 
-建议新增 P0/P1 issue：
+已新增 P0 issue：
 
 ```text
 Fix real Bub CLI tape persistence by lazy-binding runtime store
@@ -206,4 +293,6 @@ Fix real Bub CLI tape persistence by lazy-binding runtime store
 
 真实 Bub CLI + bub-codex 插件可以完成复杂任务和多轮聊天，Codex SDK、文件编辑、命令执行、最终回答都工作。
 
-但真实 CLI 模式目前没有持久化 `bub-codex` tape events，因此还不能宣称 CLI production path 满足 tape-first resume 语义。这个问题应作为 release-ready 前的核心修复项。
+初始实现因为在 plugin factory 阶段 eager 构建 runtime，导致真实 CLI 没有持久化 `bub-codex` tape events。按照 builtin Agent lifecycle 调整为 run-time lazy binding 后，真实 CLI 已能把 `bub-codex` events 写入 Bub FileTapeStore。
+
+当前仍建议保留 release gate：每次关键变更后跑真实 CLI research，确认任务成功、workspace 副作用正确、tape events 持久化、same `session_id` 推导 same `thread_id` resume。

@@ -217,14 +217,15 @@ def _analyze(runs: list[CliRun], workspace_files: dict[str, str], tapes: list[di
             payload = entry.get("payload") if isinstance(entry, dict) else None
             if not isinstance(payload, dict):
                 continue
-            event_type = payload.get("type") or payload.get("event_type")
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+            event_type = data.get("type") or data.get("event_type")
             if isinstance(event_type, str):
                 event_types.append(event_type)
-            thread_id = payload.get("thread_id")
+            thread_id = data.get("thread_id")
             if isinstance(thread_id, str) and thread_id:
                 thread_ids.append(thread_id)
             if event_type == "bub.runtime.error":
-                runtime_errors.append(payload)
+                runtime_errors.append(data)
     return {
         "all_runs_succeeded": all(run.returncode == 0 for run in runs),
         "returncodes": {run.name: run.returncode for run in runs},

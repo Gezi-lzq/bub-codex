@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 from bub.framework import BubFramework  # noqa: E402
 from bub_codex.config import BubCodexSettings  # noqa: E402
 from bub_codex.plugin import BubCodexPlugin  # noqa: E402
+from bub_codex.plugin import LazyRuntimeStreamService  # noqa: E402
 from bub_codex.plugin import build_runtime_stream_service, create_plugin, stream_text  # noqa: E402
 from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
@@ -35,6 +36,7 @@ class BubPluginPackageTest(unittest.TestCase):
         plugin = create_plugin(SimpleNamespace(workspace=ROOT, get_tape_store=lambda: None))
 
         self.assertIsInstance(plugin, BubCodexPlugin)
+        self.assertIsInstance(plugin.runtime, LazyRuntimeStreamService)
 
     def test_openai_codex_sdk_dependency_is_importable(self) -> None:
         from openai_codex.client import CodexClient, CodexConfig
@@ -56,18 +58,57 @@ class BubPluginPackageTest(unittest.TestCase):
             ):
                 framework.load_hooks()
 
-        report = framework.hook_report()
-        stream = asyncio.run(
-            framework._hook_runtime.run_model_stream(
-                prompt="hello",
-                session_id="s1",
-                state={"_runtime_workspace": str(ROOT)},
-            )
-        )
-        text = asyncio.run(_collect_text(stream))
+                report = framework.hook_report()
+                stream = asyncio.run(
+                    framework._hook_runtime.run_model_stream(
+                        prompt="hello",
+                        session_id="s1",
+                        state={"_runtime_workspace": str(ROOT)},
+                    )
+                )
+                text = asyncio.run(_collect_text(stream))
 
-        self.assertTrue(framework._plugin_status["codex"].is_success)
-        self.assertIn("codex", report["run_model_stream"])
+            self.assertTrue(framework._plugin_status["codex"].is_success)
+            self.assertIn("codex", report["run_model_stream"])
+            self.assertEqual(text, "package lifecycle ok")
+
+    def test_plugin_binds_bub_tape_store_at_run_time_not_load_time(self) -> None:
+        class FakeTapeStore:
+            pass
+
+        framework_tape_store = FakeTapeStore()
+
+        class FakeFramework:
+            workspace = ROOT
+
+            def __init__(self) -> None:
+                self.active_store = None
+
+            def get_tape_store(self):
+                return self.active_store
+
+        framework = FakeFramework()
+        plugin = create_plugin(framework)
+        self.assertIsInstance(plugin.runtime, LazyRuntimeStreamService)
+
+        framework.active_store = framework_tape_store
+        captured = {}
+
+        def fake_build_runtime_stream_service(active_framework, settings=None):
+            captured["store"] = active_framework.get_tape_store()
+            return FakeRuntimeStreamService()
+
+        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+            stream = asyncio.run(
+                plugin.run_model_stream(
+                    prompt="hello",
+                    session_id="s1",
+                    state={"_runtime_workspace": str(ROOT)},
+                )
+            )
+            text = asyncio.run(_collect_text(stream))
+
+        self.assertIs(captured["store"], framework_tape_store)
         self.assertEqual(text, "package lifecycle ok")
 
     def test_runtime_uses_bub_tape_store_when_available(self) -> None:

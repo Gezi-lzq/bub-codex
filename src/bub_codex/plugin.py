@@ -21,11 +21,7 @@ def create_plugin(framework: Any) -> "BubCodexPlugin":
     settings = load_settings()
     if not settings.enabled:
         return BubCodexPlugin()
-    try:
-        runtime = build_runtime_stream_service(framework, settings=settings)
-    except Exception as exc:
-        runtime = UnconfiguredRuntimeStreamService(f"bub-codex runtime is not configured: {exc}")
-    return BubCodexPlugin(runtime)
+    return BubCodexPlugin(LazyRuntimeStreamService(framework, settings=settings))
 
 
 class RuntimeStreamService(Protocol):
@@ -55,6 +51,36 @@ class UnconfiguredRuntimeStreamService:
             ok=False,
             error={"kind": "unknown", "message": self.message},
         )
+
+
+class LazyRuntimeStreamService:
+    """Build the real runtime service inside Bub's turn lifecycle.
+
+    Bub exposes the active tape store only while `framework.running()` is active.
+    Plugin factories run earlier during hook loading, so the plugin must not bind
+    the tape store in `create_plugin()`.
+    """
+
+    def __init__(self, framework: Any, *, settings: BubCodexSettings) -> None:
+        self.framework = framework
+        self.settings = settings
+
+    async def run_stream(
+        self,
+        *,
+        prompt: str | list[dict],
+        session_id: str,
+        state: State,
+    ) -> AsyncStreamEvents:
+        try:
+            runtime = build_runtime_stream_service(self.framework, settings=self.settings)
+        except Exception as exc:
+            return stream_text(
+                f"bub-codex runtime is not configured: {exc}",
+                ok=False,
+                error={"kind": "unknown", "message": f"bub-codex runtime is not configured: {exc}"},
+            )
+        return await runtime.run_stream(prompt=prompt, session_id=session_id, state=state)
 
 
 class BubCodexPlugin:
