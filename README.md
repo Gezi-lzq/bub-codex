@@ -1,102 +1,97 @@
 # bub-codex
 
-`bub-codex` explores embedding Codex as a native Bub coding runtime.
+`bub-codex` is a Bub plugin that embeds Codex as a Bub-native coding runtime.
 
-The goal is not to wrap Bub around `codex e` as an external subprocess. The goal is to make Codex participate in Bub's runtime model directly: hooks, tapes, channels, tools, observability, and session context should be first-class runtime concerns rather than incidental CLI IO.
+It does not wrap Bub around `codex e` as an opaque subprocess. Instead, Codex
+participates in Bub's runtime model directly: hooks, tapes, channels, runtime
+configuration, context continuity, structured events, and session recovery are
+first-class concerns.
 
-## Context
+## Status
 
-- [bubbuild/bub](https://github.com/bubbuild/bub) is the core Bub runtime: a hook-first runtime for agents that live alongside people.
-- [bubbuild/bub-contrib](https://github.com/bubbuild/bub-contrib) contains ecosystem packages, including an existing `packages/bub-codex` plugin that delegates model execution to the Codex CLI.
-- [tape.systems](https://tape.systems/) frames context as an append-only fact model for long-running work.
-- [tommy0103/obelisk](https://github.com/tommy0103/obelisk) exposes past agent work as structured local data for agent queries.
-- [langfuse/codex-observability-plugin](https://github.com/langfuse/codex-observability-plugin) traces Codex agent turns, tool calls, and subagents to Langfuse.
+Current status:
 
-## Design Intent
+```text
+MVP candidate skeleton, not release-ready MVP
+```
 
-This repository starts from a narrower claim than the existing `bub-contrib` Codex integration:
+The current package includes:
 
-> Codex should run as a Bub-native coding runtime, not as an opaque CLI child process.
+- A Bub plugin entry point: `bub_codex.plugin:create_plugin`.
+- Bub config wiring via `@bub.config(name="codex")`.
+- A live `run_model_stream` bridge backed by the real `openai_codex` SDK.
+- Bub/Republic tape store integration.
+- Tape-first Anchor/thread resolution.
+- Existing Codex thread resume from tape-derived bindings.
+- Current-thread notification filtering.
+- Minimal runtime diagnostic tape events.
+- Codex compaction notification projection into Bub Anchors.
+- Unit tests and manual real Codex SDK smoke checks.
 
-That implies:
+Current release readiness is tracked in:
 
-- Bub can observe and shape Codex turn stages through hooks.
-- Codex sessions can be represented in Bub tapes rather than only terminal transcripts.
-- Tool calls, subagents, approvals, and file edits can become structured runtime events.
-- Observability can be attached at the runtime boundary, not scraped from process output.
-- Past work can be queried through systems like Obelisk without depending on ad-hoc chat history.
+- [MVP Candidate Checkpoint](docs/release/mvp-candidate-checkpoint.md)
+- [MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md)
+- [MVP PRD](docs/prd-mvp-live-codex-runtime.md)
 
-## Initial Questions
+## Runtime Model
 
-- Which Codex runtime APIs are stable enough to embed directly?
-- What is the minimal Bub hook surface needed for a coding runtime?
-- How should Codex session state map onto Bub tapes?
-- Which events belong in Bub's domain model versus an observability adapter?
-- How should approval, sandboxing, and tool execution be represented when Codex is not just a subprocess?
+The production MVP path is:
 
-## Repository Status
+```text
+Bub run_model_stream
+  -> bub-codex plugin
+  -> live Codex SDK notification stream
+  -> CodexTurnTranslator
+  -> Bub tape events
+  -> Bub stream text/final
+```
 
-This repository currently contains an MVP candidate skeleton, not a
-release-ready MVP.
+Key semantics:
 
-The package now has a Bub plugin entry point, Bub config wiring, a live
-`run_model_stream` bridge, Bub/Republic tape store integration, current-thread
-notification filtering, minimal runtime diagnostic events, and tests for Anchor
-bootstrap, thread materialization, resume, compaction Anchor projection, and
-stream final-answer behavior.
+- Bub tape is the canonical record, not Codex rollout JSONL or observability
+  traces.
+- `session_id`, tape id, Codex `thread_id`, turn id, and Anchor id are distinct
+  identities.
+- A Codex thread is bound to a committed Bub Anchor only after materialization
+  succeeds.
+- If a bound Codex thread fails to resume, the failure is surfaced; the runtime
+  does not silently create a replacement thread.
+- `phase=commentary` assistant messages are preserved in tape but are not
+  emitted as Bub `text`.
+- `phase=final_answer` assistant messages drive Bub `text` and `final.text`.
+- Codex auto compaction creates a Bub Anchor with `method=compact`.
 
-Real Codex SDK smoke tests have covered assistant messages, command execution,
-command failure/retry, file changes, Anchor bootstrap, thread materialization,
-turn completion, and two-turn live resume from the same tape-derived thread
-binding. These remain manual checks because they depend on the external Codex
-runtime and model behavior.
+## Installation
 
-Current release readiness is tracked in
-[MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md).
-The current delivery checkpoint is summarized in
-[MVP Candidate Checkpoint](docs/release/mvp-candidate-checkpoint.md).
-
-## Bub Plugin Package
-
-MVP 必须按 Bub plugin package 规范收敛，而不是只保留可手动运行的
-spike 模块。
-
-当前最小入口：
-
-- `pyproject.toml` 声明 Python package。
-- `openai-codex` 是项目依赖，import 名为 `openai_codex`。
-- `[project.entry-points."bub"]` 注册 `codex = "bub_codex.plugin:create_plugin"`。
-- `create_plugin(framework)` 捕获 Bub `BubFramework`，构造只实现
-  `run_model_stream` 的 `BubCodexPlugin`。
-- `BubCodexSettings` 使用 `@bub.config(name="codex")` 注册配置，并通过
-  `bub.ensure_config(BubCodexSettings)` 读取。
-- 插件必须安装到运行 Bub 的同一个 Python 环境中。
-
-开发期安装：
+Install the package into the same Python environment that runs Bub:
 
 ```bash
 uv pip install -e .
+```
+
+Verify that Bub can discover the installed plugin without starting a real Codex
+runtime:
+
+```bash
 BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
 ```
 
-这个检查只验证 Bub 能从已安装的 package entry point 发现 `codex` 插件；
-`BUB_CODEX_ENABLED=false` 会避免启动真实 Codex runtime。脚本内部运行
-`python -m bub hooks`，并断言输出包含：
+Expected output:
+
+```text
+OK: Bub discovered installed bub-codex plugin (run_model_stream: builtin, codex).
+```
+
+The underlying Bub hook report should include:
 
 ```text
 run_model_stream: builtin, codex
 ```
 
-当前 MVP 骨架已覆盖：
+## Configuration
 
-- installed package entry point discovery
-- live `run_model_stream` bridge
-- Bub/Republic `FileTapeStore` 持久化读回
-- 从 tape 推导 existing Codex thread resume
-- Codex compaction notification 创建 Bub Anchor
-
-最小配置可以放在 Bub config 的 `codex:` 段，也可以用 `BUB_CODEX_*`
-环境变量覆盖：
+Minimal Bub config:
 
 ```yaml
 codex:
@@ -109,18 +104,87 @@ codex:
   env: {}
 ```
 
-通常不需要设置 `sdk_python_path`；它只用于开发期临时指向本地
-`openai-codex/sdk/python/src` checkout。如果 `openai_codex` SDK 或 Codex
-runtime 不可用，插件会返回明确的 `bub-codex runtime is not configured`
-错误。MVP 生产路径不引入 batch fallback；逗号命令仍委托给 Bub builtin
-agent。
+The same settings can be overridden with `BUB_CODEX_*` environment variables.
 
-真实 Codex SDK resume smoke 保持为手动检查，不进入默认单元测试：
+Notes:
+
+- `openai-codex` is a project dependency; the import name is `openai_codex`.
+- `sdk_python_path` is only a development escape hatch for pointing at a local
+  `openai-codex/sdk/python/src` checkout.
+- v0 intentionally uses maximum local permission:
+  `approval_policy=never`, `sandbox=danger-full-access`.
+- If the Codex SDK or runtime cannot be configured, the plugin returns an
+  explicit `bub-codex runtime is not configured` stream error.
+- The MVP production path does not use a batch fallback.
+- Bub comma commands are delegated back to Bub builtin agent behavior.
+
+## Verification
+
+Default local checks:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+PYTHONPATH=src .venv/bin/python -m py_compile src/bub_codex/*.py tests/*.py scripts/*.py scripts/spikes/*.py
+```
+
+Installed plugin discovery:
+
+```bash
+BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
+```
+
+Manual real Codex SDK resume smoke:
 
 ```bash
 python scripts/spikes/real_codex_resume_smoke.py
 ```
 
-该脚本会运行两轮 live bridge turn，复用同一个 tape store，并断言第二轮
-resume 第一轮绑定的 Codex thread，没有创建 replacement thread。结果写入
-`artifacts/spikes/real-codex-resume-smoke-*/result.json`。
+The resume smoke runs two live bridge turns against the real Codex SDK, reuses
+the same tape store, and asserts that the second turn resumes the first turn's
+bound Codex thread without creating a replacement thread. Results are written to:
+
+```text
+artifacts/spikes/real-codex-resume-smoke-*/result.json
+```
+
+## Important Files
+
+- `src/bub_codex/plugin.py` - Bub plugin entry point.
+- `src/bub_codex/config.py` - Bub config model.
+- `src/bub_codex/live_stream.py` - MVP live notification bridge.
+- `src/bub_codex/runtime.py` - tape-first runtime context facade.
+- `src/bub_codex/codex_thread_service.py` - Codex SDK thread lifecycle adapter.
+- `src/bub_codex/turn_translator.py` - raw notification to tape/stream translator.
+- `src/bub_codex/republic_tape_store.py` - Bub/Republic tape adapter.
+- `scripts/verify_installed_plugin.py` - installed plugin discovery check.
+- `scripts/spikes/real_codex_resume_smoke.py` - manual real SDK resume smoke.
+
+## Documentation
+
+- [CONTEXT.md](CONTEXT.md) - domain language, current decisions, and open
+  questions.
+- [MVP Candidate Checkpoint](docs/release/mvp-candidate-checkpoint.md) - current
+  delivery baseline.
+- [MVP PRD](docs/prd-mvp-live-codex-runtime.md) - product boundary and acceptance
+  criteria.
+- [MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md) -
+  readiness status and remaining hardening.
+- [ADR index](CONTEXT.md#adr-index) - architecture decision records.
+
+## Current Non-Goals
+
+The current MVP candidate intentionally excludes:
+
+- Bub dynamic tool hosting production contract.
+- Token-level assistant streaming from `item/agentMessage/delta`.
+- Active/manual compact triggering.
+- Context overflow policy.
+- Approval UX or policy engine.
+- Langfuse, OTel, or Obelisk projections.
+- Replay engine or UI timeline.
+- Full schema for reasoning, token usage, MCP tools, collab agents, web search,
+  and image items.
+- Full `CodexEnvironment` module.
+
+The remaining post-MVP hardening track is captured in GitHub issue #8:
+`P2: Design post-MVP CodexEnvironment module`.
