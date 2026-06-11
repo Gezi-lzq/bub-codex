@@ -9,6 +9,7 @@ from bub.types import State
 
 from .plugin import _default_tape_id, _prompt_text
 from .runtime import BubCodexRuntime
+from .notification_filter import record_belongs_to_thread
 from .tape_events import JsonObject
 from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
 
@@ -93,6 +94,8 @@ async def _iter_live_turn_events(
         cwd=cwd,
         prompt=prompt,
     ):
+        if not record_belongs_to_thread(record, thread_id):
+            continue
         translation = translator.accept(record)
         runtime.tape_store.append_many(translation.tape_events)
         for decision in translation.stream_decisions:

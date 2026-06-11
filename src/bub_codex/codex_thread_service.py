@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from typing import Any, Callable
 
 from .codex_client import DynamicToolSpec, ThreadStartOptions
+from .notification_filter import record_belongs_to_thread
 
 
 NotificationObserver = Callable[[Any], None]
@@ -116,6 +117,8 @@ class MaterializingCodexThreadService:
             while True:
                 event = self._client.next_turn_notification(turn_id)
                 record = _notification_record(event)
+                if not record_belongs_to_thread(record, thread_id):
+                    continue
                 notification_records.append(record)
                 if self._notification_observer:
                     self._notification_observer(event)
@@ -149,6 +152,8 @@ class MaterializingCodexThreadService:
             while True:
                 event = self._client.next_turn_notification(turn_id)
                 record = _notification_record(event)
+                if not record_belongs_to_thread(record, thread_id):
+                    continue
                 notification_records.append(record)
                 if record["method"] == "turn/completed":
                     break
@@ -176,6 +181,8 @@ class MaterializingCodexThreadService:
                     **_notification_record(event),
                     "turn_id": turn_id,
                 }
+                if not record_belongs_to_thread(record, thread_id):
+                    continue
                 yield record
                 if record["method"] == "turn/completed":
                     break

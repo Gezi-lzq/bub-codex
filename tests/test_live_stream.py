@@ -90,6 +90,33 @@ class FakeTurnStreamService:
         yield turn_completed(thread_id=thread_id, turn_id=turn_id)
 
 
+class ForeignThreadTurnStreamService:
+    def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str):
+        yield turn_started(thread_id=thread_id, turn_id="user-turn-1")
+        yield agent_message_completed(
+            thread_id="foreign-thread",
+            turn_id="foreign-turn",
+            item_id="foreign-message",
+            text="Foreign background message.",
+            phase="final_answer",
+        )
+        yield command_execution_started(
+            thread_id="foreign-thread",
+            turn_id="foreign-turn",
+            item_id="foreign-call",
+            command="pwd",
+            cwd=cwd,
+        )
+        yield agent_message_completed(
+            thread_id=thread_id,
+            turn_id="user-turn-1",
+            item_id="current-final",
+            text="Current thread final.",
+            phase="final_answer",
+        )
+        yield turn_completed(thread_id=thread_id, turn_id="user-turn-1")
+
+
 class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_writes_commentary_to_tape_but_only_streams_final_answer(self) -> None:
         async def run():
@@ -271,6 +298,32 @@ class LiveStreamTest(unittest.TestCase):
         self.assertIn("codex.thread.compacted", event_types)
         self.assertEqual(len(compact_anchor), 1)
         self.assertEqual(compact_anchor[0].payload["reason"], "auto_compact")
+
+    def test_live_bridge_filters_foreign_thread_notifications(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(runtime, ForeignThreadTurnStreamService())
+            return await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={"_runtime_workspace": "/workspace"},
+                tape_store=store,
+            )
+
+        result = asyncio.run(run())
+
+        self.assertEqual(result.final_text, "Current thread final.")
+        self.assertNotIn("Foreign background message.", result.text)
+        self.assertFalse(any(event.thread_id == "foreign-thread" for event in result.tape_events))
+        self.assertFalse(
+            any(
+                event.type.startswith("bub.tool.call")
+                and event.payload.get("thread_id") == "foreign-thread"
+                for event in result.tape_events
+            )
+        )
 
 
 if __name__ == "__main__":
