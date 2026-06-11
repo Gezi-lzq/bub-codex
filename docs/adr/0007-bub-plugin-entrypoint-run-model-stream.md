@@ -150,9 +150,14 @@ comma command
 ```text
 src/bub_codex/plugin.py
   BubCodexPlugin
+  create_plugin
+
+src/bub_codex/runtime_services.py
   BubCodexRuntimeStreamService
   RuntimeStreamService
   UnconfiguredRuntimeStreamService
+
+src/bub_codex/stream_utils.py
   stream_text(...)
 ```
 

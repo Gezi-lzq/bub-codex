@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
-from republic import AsyncStreamEvents, StreamEvent, StreamState
+from republic import AsyncStreamEvents, StreamState
 
 from bub.types import State
 
-from .plugin import _default_tape_id, _prompt_text
 from .runtime import BubCodexRuntime
 from .notification_filter import record_belongs_to_thread
 from .runtime_diagnostics import runtime_error_event
+from .stream_utils import default_tape_id, prompt_text as extract_prompt_text, to_stream_event
 from .tape_events import JsonObject
-from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
+from .turn_translator import CodexTurnTranslator, stream_error_decisions
 
 
 class CodexTurnStreamService(Protocol):
@@ -44,9 +44,9 @@ class BubCodexLiveRuntimeStreamService:
         session_id: str,
         state: State,
     ) -> AsyncStreamEvents:
-        prompt_text = _prompt_text(prompt)
+        prompt_text = extract_prompt_text(prompt)
         cwd = str(state.get("_runtime_workspace") or ".")
-        tape_id_factory = self.tape_id_factory or _default_tape_id
+        tape_id_factory = self.tape_id_factory or default_tape_id
         tape_id = str(tape_id_factory(session_id, state))
 
         try:
@@ -106,7 +106,7 @@ async def _iter_live_turn_events(
             translation = translator.accept(record)
             runtime.tape_store.append_many(translation.tape_events)
             for decision in translation.stream_decisions:
-                yield _to_stream_event(decision)
+                yield to_stream_event(decision)
     except Exception as exc:
         runtime.tape_store.append(
             runtime_error_event(
@@ -119,19 +119,15 @@ async def _iter_live_turn_events(
             )
         )
         for decision in stream_error_decisions(exc):
-            yield _to_stream_event(decision)
+            yield to_stream_event(decision)
         return
     for decision in translator.finish().stream_decisions:
-        yield _to_stream_event(decision)
+        yield to_stream_event(decision)
 
 
 def _stream_error(exc: Exception) -> AsyncStreamEvents:
     async def iterator():
         for decision in stream_error_decisions(exc):
-            yield _to_stream_event(decision)
+            yield to_stream_event(decision)
 
     return AsyncStreamEvents(iterator(), state=StreamState())
-
-
-def _to_stream_event(decision: StreamDecision) -> StreamEvent:
-    return StreamEvent(decision.kind, decision.data)

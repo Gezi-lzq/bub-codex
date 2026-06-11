@@ -15,9 +15,9 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization  # noqa: E402
-from bub_codex.plugin import BubCodexRuntimeStreamService  # noqa: E402
 from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: E402
 from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.runtime_services import BubCodexRuntimeStreamService  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from codex_record_builders import (  # noqa: E402
     agent_message_completed,

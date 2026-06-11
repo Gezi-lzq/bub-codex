@@ -5,7 +5,7 @@ from typing import Any
 
 from bub.types import State
 
-from .plugin import RuntimeStreamService
+from .runtime_services import RuntimeStreamService
 from .tape_events import JsonObject, TapeEvent
 from .tape_store import TapeStore
 

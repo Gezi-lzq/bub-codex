@@ -16,10 +16,13 @@ if str(SRC) not in sys.path:
 from bub.framework import BubFramework  # noqa: E402
 from bub_codex.config import BubCodexSettings  # noqa: E402
 from bub_codex.plugin import BubCodexPlugin  # noqa: E402
-from bub_codex.plugin import LazyRuntimeStreamService  # noqa: E402
-from bub_codex.plugin import RuntimeCacheKey  # noqa: E402
-from bub_codex.plugin import build_runtime_stream_service, create_plugin, stream_text  # noqa: E402
+from bub_codex.plugin import create_plugin  # noqa: E402
 from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
+from bub_codex.runtime_services import LazyRuntimeStreamService  # noqa: E402
+from bub_codex.runtime_services import RuntimeCacheKey  # noqa: E402
+from bub_codex.runtime_services import build_runtime_stream_service  # noqa: E402
+from bub_codex.runtime_services import runtime_cache_key  # noqa: E402
+from bub_codex.stream_utils import stream_text  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 
 
@@ -60,7 +63,7 @@ class BubPluginPackageTest(unittest.TestCase):
 
         with patch("importlib.metadata.entry_points", lambda group: [entry_point]):
             with patch(
-                "bub_codex.plugin.build_runtime_stream_service",
+                "bub_codex.runtime_services.build_runtime_stream_service",
                 lambda _framework, settings=None: FakeRuntimeStreamService(),
             ):
                 framework.load_hooks()
@@ -105,7 +108,7 @@ class BubPluginPackageTest(unittest.TestCase):
             captured["store"] = active_framework.get_tape_store()
             return FakeRuntimeStreamService()
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             stream = asyncio.run(
                 plugin.run_model_stream(
                     prompt="hello",
@@ -140,7 +143,7 @@ class BubPluginPackageTest(unittest.TestCase):
             build_count += 1
             return FakeRuntimeStreamService(f"runtime-{build_count}")
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             first = asyncio.run(
                 plugin.run_model_stream(
                     prompt="hello",
@@ -184,7 +187,7 @@ class BubPluginPackageTest(unittest.TestCase):
             build_count += 1
             return FakeRuntimeStreamService(f"runtime-{build_count}")
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             first = asyncio.run(
                 plugin.run_model_stream(
                     prompt="hello",
@@ -229,7 +232,7 @@ class BubPluginPackageTest(unittest.TestCase):
             built_services.append(service)
             return service
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             first = asyncio.run(
                 plugin.run_model_stream(
                     prompt="hello",
@@ -268,7 +271,7 @@ class BubPluginPackageTest(unittest.TestCase):
             built_services.append(runtime)
             return runtime
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             stream = asyncio.run(
                 service.run_stream(
                     prompt="hello",
@@ -300,7 +303,7 @@ class BubPluginPackageTest(unittest.TestCase):
             built_services.append(runtime)
             return runtime
 
-        with patch("bub_codex.plugin.build_runtime_stream_service", fake_build_runtime_stream_service):
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             with self.assertRaises(RuntimeError):
                 asyncio.run(
                     service.run_stream(
@@ -326,10 +329,8 @@ class BubPluginPackageTest(unittest.TestCase):
         key = service._cached_key
         self.assertIsNone(key)
 
-        from bub_codex.plugin import _runtime_cache_key
-
-        first = _runtime_cache_key(framework, service.settings)
-        second = _runtime_cache_key(framework, service.settings)
+        first = runtime_cache_key(framework, service.settings)
+        second = runtime_cache_key(framework, service.settings)
 
         self.assertIsInstance(first, RuntimeCacheKey)
         self.assertEqual(first, second)

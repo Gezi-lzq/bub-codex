@@ -16,7 +16,8 @@ from bub.framework import BubFramework
 from bub.hookspecs import hookimpl
 
 from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization
-from bub_codex.plugin import BubCodexPlugin, BubCodexRuntimeStreamService
+from bub_codex.plugin import BubCodexPlugin
+from bub_codex.runtime_services import BubCodexRuntimeStreamService
 from bub_codex.runtime import BubCodexRuntime
 from bub_codex.tape_store import InMemoryTapeStore
 
