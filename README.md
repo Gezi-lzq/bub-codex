@@ -53,6 +53,8 @@ runtime and model behavior.
 
 Current release readiness is tracked in
 [MVP Readiness Review](docs/research/2026-06-11-mvp-readiness-review.md).
+The current delivery checkpoint is summarized in
+[MVP Candidate Checkpoint](docs/release/mvp-candidate-checkpoint.md).
 
 ## Bub Plugin Package
 

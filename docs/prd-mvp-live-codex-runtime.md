@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-`bub-codex` has validated that Codex SDK notifications can be mapped into Bub runtime facts, but the current implementation is still spike-shaped. The project needs a first MVP that turns the validated spike into a usable Bub-native Codex runtime without carrying forward temporary batch/fallback paths.
+`bub-codex` has moved from validated spike work into an MVP candidate skeleton. The project now needs to preserve the MVP boundary clearly: Codex should run as a Bub-native runtime through the live bridge, while remaining hardening work is tracked explicitly instead of being hidden behind fallback paths.
 
 From the user's perspective, Codex should run inside Bub as a native coding runtime: turns should write structured tape events as they happen, preserve Anchor/thread context semantics, resume existing Codex threads when possible, and expose final answers through Bub's `run_model_stream` contract.
 
@@ -145,9 +145,10 @@ This MVP intentionally does not include Bub dynamic tool hosting, token-level as
 
 ## MVP Hardening Still Remaining
 
-- Real SDK resume smoke across two framework turns should be added once test runtime cost is acceptable.
+- Real SDK resume smoke across two live bridge turns exists as a manual check.
 - Real SDK compact smoke should remain explicit/manual until compact triggering is deterministic enough for local CI.
 - Async Republic tape stores are detected but not yet supported from an already-running event loop by `RepublicTapeStoreAdapter`.
+- Post-MVP `CodexEnvironment` design remains open for app-server lifecycle, managed config, platform-aware sandbox setup, and richer liveness diagnostics.
 
 ## Out of Scope
 
@@ -167,5 +168,6 @@ Current validated spike artifacts include:
 - `artifacts/spikes/real-codex-plugin-fibonacci-stream-20260610-225755/result.json`
 - `artifacts/spikes/real-codex-notification-mapping-20260611-011823/mapping.json`
 - `artifacts/spikes/real-codex-live-stream-20260611-015408/result.json`
+- `artifacts/spikes/real-codex-resume-smoke-20260611-160011/result.json`
 
-The project is currently a validated spike prototype, not an MVP. This PRD defines the first MVP boundary for converting the live runtime path into a Bub-native production integration.
+The project is currently an MVP candidate skeleton, not a release-ready MVP. The current checkpoint is summarized in `docs/release/mvp-candidate-checkpoint.md`.

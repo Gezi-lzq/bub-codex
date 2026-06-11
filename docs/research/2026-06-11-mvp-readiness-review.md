@@ -195,21 +195,15 @@ Async Republic tape stores are detected but not yet supported from an already-ru
 
 ### README / CONTEXT 状态描述
 
-README 和 CONTEXT 中仍有一些“还没有 installable/configurable Bub plugin MVP”的描述，已滞后于当前代码。
+已更新。
 
-建议下一步改为：
-
-```text
-validated MVP candidate skeleton
-```
-
-并保留：
+当前 README 和 CONTEXT 使用：
 
 ```text
-not release-ready MVP
+MVP candidate skeleton, not release-ready MVP
 ```
 
-原因是 package / live bridge 已经存在，但 hardening 和 checklist 还未完成。
+最终交付检查点集中记录在 `docs/release/mvp-candidate-checkpoint.md`。原因是 package / live bridge 已经存在，但 hardening 和 checklist 还未完成。
 
 ## 明确缺口
 
