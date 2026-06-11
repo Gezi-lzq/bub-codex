@@ -35,6 +35,28 @@ def agent_message_completed(
     }
 
 
+def agent_message_delta(
+    *,
+    delta: str,
+    phase: str | None = None,
+    thread_id: str = "thread-1",
+    turn_id: str = "turn-1",
+    item_id: str = "message-final_answer",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "itemId": item_id,
+        "delta": delta,
+    }
+    if phase is not None:
+        payload["phase"] = phase
+    return {
+        "method": "item/agentMessage/delta",
+        "payload": payload,
+    }
+
+
 def command_execution_started(
     *,
     command: str,

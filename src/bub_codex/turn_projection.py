@@ -56,6 +56,7 @@ def _project_assistant_message_fact(
 ) -> TapeEvent:
     payload: JsonObject = {
         "source_fact_id": fact.event_id,
+        "source_item_id": fact.item_id,
         "assistant_text": fact.payload.get("text"),
         "phase": fact.payload.get("phase"),
     }

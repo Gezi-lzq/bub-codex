@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 import bub
@@ -35,6 +36,24 @@ class RuntimeStreamService(Protocol):
         ...
 
 
+class ClosableRuntimeStreamService(RuntimeStreamService, Protocol):
+    def close(self) -> None:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeCacheKey:
+    tape_store_id: int | None
+    workspace: str | None
+    codex_bin: str | None
+    sdk_python_path: str | None
+    approval_policy: str
+    sandbox: str
+    config_overrides: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    use_bub_tape_store: bool
+
+
 class UnconfiguredRuntimeStreamService:
     def __init__(self, message: str = "bub-codex runtime is not configured") -> None:
         self.message = message
@@ -64,6 +83,8 @@ class LazyRuntimeStreamService:
     def __init__(self, framework: Any, *, settings: BubCodexSettings) -> None:
         self.framework = framework
         self.settings = settings
+        self._cached_runtime: RuntimeStreamService | None = None
+        self._cached_key: RuntimeCacheKey | None = None
 
     async def run_stream(
         self,
@@ -72,15 +93,47 @@ class LazyRuntimeStreamService:
         session_id: str,
         state: State,
     ) -> AsyncStreamEvents:
+        cache_key = _runtime_cache_key(self.framework, self.settings)
+        should_close_after_run = False
         try:
-            runtime = build_runtime_stream_service(self.framework, settings=self.settings)
+            runtime = self._cached_runtime if cache_key is not None and cache_key == self._cached_key else None
+            if runtime is None:
+                self.close()
+                runtime = build_runtime_stream_service(self.framework, settings=self.settings)
+                if cache_key is not None:
+                    self._cached_runtime = runtime
+                    self._cached_key = cache_key
+                else:
+                    should_close_after_run = True
         except Exception as exc:
             return stream_text(
                 f"bub-codex runtime is not configured: {exc}",
                 ok=False,
                 error={"kind": "unknown", "message": f"bub-codex runtime is not configured: {exc}"},
             )
-        return await runtime.run_stream(prompt=prompt, session_id=session_id, state=state)
+        try:
+            stream = await runtime.run_stream(prompt=prompt, session_id=session_id, state=state)
+        except Exception:
+            if should_close_after_run:
+                _close_runtime(runtime)
+            raise
+        if not should_close_after_run:
+            return stream
+
+        async def iterator():
+            try:
+                async for event in stream:
+                    yield event
+            finally:
+                _close_runtime(runtime)
+
+        return AsyncStreamEvents(iterator(), state=_stream_state(stream))
+
+    def close(self) -> None:
+        runtime = self._cached_runtime
+        self._cached_runtime = None
+        self._cached_key = None
+        _close_runtime(runtime)
 
 
 class BubCodexPlugin:
@@ -224,6 +277,16 @@ def stream_text(
     return AsyncStreamEvents(iterator(), state=StreamState())
 
 
+def _stream_state(stream: AsyncStreamEvents) -> StreamState | None:
+    return getattr(stream, "_state", None)
+
+
+def _close_runtime(runtime: RuntimeStreamService | None) -> None:
+    close = getattr(runtime, "close", None)
+    if callable(close):
+        close()
+
+
 def _is_comma_command(prompt: str | list[dict]) -> bool:
     return isinstance(prompt, str) and prompt.strip().startswith(",")
 
@@ -248,3 +311,23 @@ def _runtime_tape_store(framework: Any, settings: BubCodexSettings):
         if tape_store is not None:
             return RepublicTapeStoreAdapter(tape_store)
     return InMemoryTapeStore()
+
+
+def _runtime_cache_key(framework: Any, settings: BubCodexSettings) -> RuntimeCacheKey | None:
+    active_store = None
+    if settings.use_bub_tape_store and hasattr(framework, "get_tape_store"):
+        active_store = framework.get_tape_store()
+        if active_store is None:
+            return None
+    workspace = settings.workspace or getattr(framework, "workspace", None)
+    return RuntimeCacheKey(
+        tape_store_id=id(active_store) if active_store is not None else None,
+        workspace=str(workspace) if workspace is not None else None,
+        codex_bin=str(settings.codex_bin) if settings.codex_bin else None,
+        sdk_python_path=str(settings.sdk_python_path) if settings.sdk_python_path else None,
+        approval_policy=settings.approval_policy,
+        sandbox=settings.sandbox,
+        config_overrides=tuple(settings.config_overrides),
+        env=tuple(sorted(settings.env.items())),
+        use_bub_tape_store=settings.use_bub_tape_store,
+    )

@@ -32,6 +32,11 @@ class BubCodexLiveRuntimeStreamService:
     codex_turn_streams: CodexTurnStreamService
     tape_id_factory: Any | None = None
 
+    def close(self) -> None:
+        close = getattr(self.codex_turn_streams, "close", None)
+        if callable(close):
+            close()
+
     async def run_stream(
         self,
         *,

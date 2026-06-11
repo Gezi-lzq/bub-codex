@@ -13,11 +13,20 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from bub_codex.codex_thread_service import MaterializingCodexThreadService  # noqa: E402
+from bub_codex.codex_thread_service import MaterializingCodexThreadService, _default_initial_prompt  # noqa: E402
 from codex_record_builders import agent_message_completed, turn_completed, turn_started  # noqa: E402
 
 
 class MaterializingCodexThreadServiceTest(unittest.TestCase):
+    def test_default_materialization_prompt_includes_anchor_materialized_context(self) -> None:
+        prompt = _default_initial_prompt("anchor-1", "anchor-derived context")
+
+        self.assertIn("anchor-1", prompt)
+        self.assertIn("Materialized context:", prompt)
+        self.assertIn("anchor-derived context", prompt)
+        self.assertIn("Do not answer or execute the user's task", prompt)
+        self.assertNotIn("Intent:", prompt)
+
     def test_stream_records_ignore_foreign_thread_completed_without_ending_current_turn(self) -> None:
         client = FakeCodexClient(
             [
@@ -48,11 +57,20 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         self.assertTrue(all(record["payload"]["threadId"] == "current-thread" for record in records))
         self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
 
+    def test_close_closes_underlying_codex_client_when_supported(self) -> None:
+        client = FakeCodexClient([])
+        service = MaterializingCodexThreadService(client, cwd="/workspace")
+
+        service.close()
+
+        self.assertTrue(client.closed)
+
 
 class FakeCodexClient:
     def __init__(self, events):
         self.events = list(events)
         self.unregistered_turn_ids: list[str] = []
+        self.closed = False
 
     def turn_start(self, thread_id: str, prompt: str, options):
         return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
@@ -62,6 +80,9 @@ class FakeCodexClient:
 
     def unregister_turn_notifications(self, turn_id: str) -> None:
         self.unregistered_turn_ids.append(turn_id)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _event(record):

@@ -73,6 +73,11 @@ class LowLevelCodexThreadService:
             },
         )
 
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
+
 
 class MaterializingCodexThreadService:
     """Create a Codex thread and complete the initial materialization turn."""
@@ -144,6 +149,11 @@ class MaterializingCodexThreadService:
             },
         )
 
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
+
     def run_turn(self, *, thread_id: str, cwd: str, prompt: str) -> CodexTurn:
         turn = self._client.turn_start(thread_id, prompt, {"cwd": cwd})
         turn_id = turn.turn.id
@@ -190,12 +200,13 @@ class MaterializingCodexThreadService:
             self._client.unregister_turn_notifications(turn_id)
 
 
-def _default_initial_prompt(anchor_id: str, intent: str) -> str:
+def _default_initial_prompt(anchor_id: str, materialized_context: str) -> str:
     return (
-        "Materialize this Bub Anchor as the starting context for this Codex thread.\n\n"
+        "Materialize this Bub Anchor as the starting context for this Codex thread. "
+        "Do not answer or execute the user's task during materialization.\n\n"
         f"Anchor: {anchor_id}\n"
-        f"Intent: {intent}\n\n"
-        "Reply with a concise acknowledgement."
+        f"Materialized context:\n{materialized_context}\n\n"
+        "Reply only with a concise acknowledgement that the Anchor was materialized."
     )
 
 

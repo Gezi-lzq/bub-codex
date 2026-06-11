@@ -156,7 +156,7 @@ def materialize_thread_binding_events(
             "strategy": "anchor_state_plus_selected_tape_refs",
             "selected_fact_refs": selected_refs,
             "input_sha256": _sha256_text(materialized_input),
-            "input_preview": materialized_input[:800],
+            "intent_sha256": _sha256_text(intent),
             "token_estimate": _rough_token_estimate(materialized_input),
             "workspace_metadata": workspace_metadata or {},
             "refs": {
@@ -235,7 +235,7 @@ def materialize_thread_binding_failed_events(
             "strategy": "anchor_state_plus_selected_tape_refs",
             "selected_fact_refs": selected_refs,
             "input_sha256": _sha256_text(materialized_input),
-            "input_preview": materialized_input[:800],
+            "intent_sha256": _sha256_text(intent),
             "token_estimate": _rough_token_estimate(materialized_input),
             "workspace_metadata": workspace_metadata or {},
         },
@@ -350,7 +350,9 @@ def build_initial_input(
         },
         "selected_fact_refs": selected_refs,
         "workspace_metadata": workspace_metadata,
-        "current_intent": intent,
+        "current_intent_ref": {
+            "sha256": _sha256_text(intent),
+        },
     }
     return json.dumps(material, ensure_ascii=False, sort_keys=True, indent=2)
 

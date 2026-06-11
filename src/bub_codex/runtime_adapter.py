@@ -131,7 +131,11 @@ def facts_from_notification_record(
             _fact(
                 "codex.assistant_message.delta",
                 source=source,
-                payload={"delta": payload.get("delta")},
+                payload={
+                    "delta": payload.get("delta"),
+                    "phase": payload.get("phase"),
+                    "raw": payload,
+                },
                 occurred_at=occurred_at,
                 thread_id=thread_id,
                 turn_id=turn_id,

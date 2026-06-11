@@ -7,6 +7,11 @@ participates in Bub's runtime model directly: hooks, tapes, channels, runtime
 configuration, context continuity, structured events, and session recovery are
 first-class concerns.
 
+This package intentionally differs from the historical `bub-contrib` Codex
+plugin, which delegated to `codex e` and stored CLI resume ids in a workspace
+JSON file. `bub-codex` uses the Codex SDK/app-server and treats Bub tape events
+as the runtime state source.
+
 ## Status
 
 Current status:
@@ -23,6 +28,8 @@ The current package includes:
 - Bub/Republic tape store integration.
 - Tape-first Anchor/thread resolution.
 - Existing Codex thread resume from tape-derived bindings.
+- Runtime service reuse within a long-lived Bub process.
+- Explicit close propagation for cached Codex runtime services.
 - Current-thread notification filtering.
 - Minimal runtime diagnostic tape events.
 - Codex compaction notification projection into Bub Anchors.
@@ -55,6 +62,9 @@ Key semantics:
   identities.
 - A Codex thread is bound to a committed Bub Anchor only after materialization
   succeeds.
+- Anchor materialization does not include the full user task prompt in the
+  Codex materialization turn. The user task is handled only by the real user
+  turn.
 - If a bound Codex thread fails to resume, the failure is surfaced; the runtime
   does not silently create a replacement thread.
 - `phase=commentary` assistant messages are preserved in tape but are not
@@ -176,7 +186,9 @@ artifacts/spikes/real-codex-resume-smoke-*/result.json
 The current MVP candidate intentionally excludes:
 
 - Bub dynamic tool hosting production contract.
-- Token-level assistant streaming from `item/agentMessage/delta`.
+- Guaranteed token-level assistant streaming. The bridge can forward
+  `item/agentMessage/delta` when the SDK emits final-answer deltas, but current
+  real SDK runs often only expose completed assistant messages.
 - Active/manual compact triggering.
 - Context overflow policy.
 - Approval UX or policy engine.

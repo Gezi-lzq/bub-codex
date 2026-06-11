@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from codex_record_builders import agent_message_completed, context_compaction_completed  # noqa: E402
+from codex_record_builders import agent_message_completed, agent_message_delta, context_compaction_completed  # noqa: E402
 from bub_codex.turn_translator import CodexTurnTranslator  # noqa: E402
 
 
@@ -52,6 +52,82 @@ class CodexTurnTranslatorTest(unittest.TestCase):
             [(decision.kind, decision.data) for decision in finish.stream_decisions],
             [("final", {"text": "Done.", "ok": True})],
         )
+
+    def test_final_answer_delta_streams_without_tape_and_completed_does_not_duplicate_text(self) -> None:
+        translator = _translator()
+
+        first = translator.accept(agent_message_delta(delta="Do", phase="final_answer"))
+        second = translator.accept(agent_message_delta(delta="ne.", phase="final_answer"))
+        completed = translator.accept(agent_message_completed(text="Done.", phase="final_answer"))
+        finish = translator.finish()
+
+        self.assertEqual(first.tape_events, ())
+        self.assertEqual(second.tape_events, ())
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in first.stream_decisions],
+            [("text", {"delta": "Do"})],
+        )
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in second.stream_decisions],
+            [("text", {"delta": "ne."})],
+        )
+        self.assertEqual(
+            [event.type for event in completed.tape_events],
+            ["codex.assistant_message.completed"],
+        )
+        self.assertEqual(completed.stream_decisions, ())
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [("final", {"text": "Done.", "ok": True})],
+        )
+
+    def test_final_answer_delta_suppression_is_scoped_to_same_item(self) -> None:
+        translator = _translator()
+
+        first_delta = translator.accept(
+            agent_message_delta(
+                delta="First.",
+                phase="final_answer",
+                item_id="msg-1",
+            )
+        )
+        first_completed = translator.accept(
+            agent_message_completed(
+                text="First.",
+                phase="final_answer",
+                item_id="msg-1",
+            )
+        )
+        second_completed = translator.accept(
+            agent_message_completed(
+                text="Second.",
+                phase="final_answer",
+                item_id="msg-2",
+            )
+        )
+        finish = translator.finish()
+
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in first_delta.stream_decisions],
+            [("text", {"delta": "First."})],
+        )
+        self.assertEqual(first_completed.stream_decisions, ())
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in second_completed.stream_decisions],
+            [("text", {"delta": "Second."})],
+        )
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [("final", {"text": "First.\nSecond.", "ok": True})],
+        )
+
+    def test_commentary_delta_is_not_streamed_or_written_to_tape(self) -> None:
+        translator = _translator()
+
+        result = translator.accept(agent_message_delta(delta="I will inspect.", phase="commentary"))
+
+        self.assertEqual(result.tape_events, ())
+        self.assertEqual(result.stream_decisions, ())
 
     def test_finish_uses_last_assistant_message_when_no_final_answer_exists(self) -> None:
         translator = _translator()

@@ -21,6 +21,7 @@ from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: 
 from bub_codex.runtime import BubCodexRuntime  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from codex_record_builders import (  # noqa: E402
+    agent_message_delta,
     agent_message_completed,
     command_execution_completed,
     command_execution_started,
@@ -85,6 +86,34 @@ class FakeTurnStreamService:
             turn_id=turn_id,
             item_id="msg-final-1",
             text="Final answer.",
+            phase="final_answer",
+        )
+        yield turn_completed(thread_id=thread_id, turn_id=turn_id)
+
+
+class DeltaTurnStreamService:
+    def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str):
+        turn_id = "user-turn-1"
+        yield turn_started(thread_id=thread_id, turn_id=turn_id)
+        yield agent_message_delta(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            item_id="msg-final-1",
+            delta="Hel",
+            phase="final_answer",
+        )
+        yield agent_message_delta(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            item_id="msg-final-1",
+            delta="lo.",
+            phase="final_answer",
+        )
+        yield agent_message_completed(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            item_id="msg-final-1",
+            text="Hello.",
             phase="final_answer",
         )
         yield turn_completed(thread_id=thread_id, turn_id=turn_id)
@@ -162,6 +191,36 @@ class LiveStreamTest(unittest.TestCase):
             event for event in result.tape_events if event.type == "codex.assistant_message.completed"
         ]
         self.assertEqual([event.payload["phase"] for event in assistant_events], ["commentary", "final_answer"])
+
+    def test_live_bridge_streams_final_answer_delta_without_duplicate_completed_text(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(runtime, DeltaTurnStreamService())
+            return await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={"_runtime_workspace": "/workspace"},
+                tape_store=store,
+            )
+
+        result = asyncio.run(run())
+
+        self.assertEqual(result.text, "Hello.")
+        self.assertEqual(result.final_text, "Hello.")
+        self.assertEqual(
+            [(event.kind, event.data) for event in result.stream_events if event.kind == "text"],
+            [
+                ("text", {"delta": "Hel"}),
+                ("text", {"delta": "lo."}),
+            ],
+        )
+        assistant_events = [
+            event for event in result.tape_events if event.type == "codex.assistant_message.completed"
+        ]
+        self.assertEqual(len(assistant_events), 1)
+        self.assertEqual(assistant_events[0].payload["assistant_text"], "Hello.")
 
     def test_live_bridge_resumes_thread_from_tape_binding(self) -> None:
         async def run():

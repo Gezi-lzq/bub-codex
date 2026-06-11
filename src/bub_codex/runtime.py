@@ -4,9 +4,12 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal, Protocol
 
 from .context_materialization import (
+    build_initial_input,
     create_new_thread_anchor_events,
+    find_anchor_created,
     materialize_thread_binding_events,
     materialize_thread_binding_failed_events,
+    select_context_refs,
 )
 from .codex_thread_service import CodexTurn, ThreadMaterialization
 from .materialization_projection import project_thread_materialization_events
@@ -202,9 +205,19 @@ class BubCodexRuntime:
             raise RuntimeError("cannot materialize thread without a committed Anchor")
 
         metadata = {"cwd": cwd, **(workspace_metadata or {})}
+        materialization_input = _materialization_input_for_anchor(
+            base_events,
+            anchor_id=anchor_id,
+            intent=intent,
+            workspace_metadata=metadata,
+        )
         try:
             materialization = _normalize_thread_materialization(
-                self.codex_threads.materialize_thread(cwd=cwd, anchor_id=anchor_id, intent=intent)
+                self.codex_threads.materialize_thread(
+                    cwd=cwd,
+                    anchor_id=anchor_id,
+                    intent=materialization_input,
+                )
             )
         except Exception as exc:
             error = {"type": type(exc).__name__, "message": str(exc)}
@@ -266,6 +279,24 @@ def _latest_anchor_id(events: list[TapeEvent]) -> str | None:
         if event.type == "bub.anchor.created" and event.anchor_id:
             return event.anchor_id
     return None
+
+
+def _materialization_input_for_anchor(
+    events: list[TapeEvent],
+    *,
+    anchor_id: str,
+    intent: str,
+    workspace_metadata: JsonObject,
+) -> str:
+    anchor = find_anchor_created(events, anchor_id)
+    if anchor is None:
+        raise RuntimeError("cannot materialize thread without a committed Anchor")
+    return build_initial_input(
+        anchor=anchor,
+        intent=intent,
+        selected_refs=select_context_refs(events, anchor, recent_event_limit=8),
+        workspace_metadata=workspace_metadata,
+    )
 
 
 def _normalize_thread_materialization(value: str | ThreadMaterialization) -> ThreadMaterialization:
