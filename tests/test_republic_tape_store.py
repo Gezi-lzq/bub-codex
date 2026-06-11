@@ -11,7 +11,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from bub.builtin.store import FileTapeStore  # noqa: E402
-from bub_codex import RepublicTapeStoreAdapter, make_tape_event  # noqa: E402
+from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
+from bub_codex.tape_events import make_tape_event  # noqa: E402
 
 
 class RepublicTapeStoreAdapterTest(unittest.TestCase):

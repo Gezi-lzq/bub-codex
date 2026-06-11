@@ -11,7 +11,9 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import BubCodexRuntime, CodexTurn, InMemoryTapeStore, ThreadMaterialization
+from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization
+from bub_codex.runtime import BubCodexRuntime
+from bub_codex.tape_store import InMemoryTapeStore
 
 
 @dataclass(slots=True)

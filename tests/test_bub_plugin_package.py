@@ -14,8 +14,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from bub.framework import BubFramework  # noqa: E402
-from bub_codex import BubCodexPlugin, BubCodexSettings, InMemoryTapeStore, RepublicTapeStoreAdapter  # noqa: E402
+from bub_codex.config import BubCodexSettings  # noqa: E402
+from bub_codex.plugin import BubCodexPlugin  # noqa: E402
 from bub_codex.plugin import build_runtime_stream_service, create_plugin, stream_text  # noqa: E402
+from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
+from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 
 
 class BubPluginPackageTest(unittest.TestCase):

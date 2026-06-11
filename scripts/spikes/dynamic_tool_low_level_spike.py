@@ -15,7 +15,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (
+from bub_codex.codex_client import (
     DynamicToolCall,
     DynamicToolDispatcher,
     DynamicToolResult,

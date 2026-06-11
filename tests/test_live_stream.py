@@ -12,12 +12,18 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (  # noqa: E402
-    BubCodexLiveRuntimeStreamService,
-    BubCodexRuntime,
-    InMemoryTapeStore,
-    ThreadMaterialization,
-    run_plugin_stream_once,
+from bub_codex.codex_thread_service import ThreadMaterialization  # noqa: E402
+from bub_codex.live_stream import BubCodexLiveRuntimeStreamService  # noqa: E402
+from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: E402
+from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
+from codex_record_builders import (  # noqa: E402
+    agent_message_completed,
+    command_execution_completed,
+    command_execution_started,
+    context_compaction_completed,
+    turn_completed,
+    turn_started,
 )
 
 
@@ -33,14 +39,8 @@ class FakeMaterializingThreadService:
             thread_id=thread_id,
             turn_id="materialization-turn-1",
             notification_records=(
-                {
-                    "method": "turn/started",
-                    "payload": {"threadId": thread_id, "turn": {"id": "materialization-turn-1"}},
-                },
-                {
-                    "method": "turn/completed",
-                    "payload": {"threadId": thread_id, "turn": {"id": "materialization-turn-1"}},
-                },
+                turn_started(thread_id=thread_id, turn_id="materialization-turn-1"),
+                turn_completed(thread_id=thread_id, turn_id="materialization-turn-1"),
             ),
         )
 
@@ -51,77 +51,37 @@ class FakeMaterializingThreadService:
 class FakeTurnStreamService:
     def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str):
         turn_id = "user-turn-1"
-        yield {"method": "turn/started", "payload": {"threadId": thread_id, "turn": {"id": turn_id}}}
-        yield _agent_message(
+        yield turn_started(thread_id=thread_id, turn_id=turn_id)
+        yield agent_message_completed(
             thread_id=thread_id,
             turn_id=turn_id,
             item_id="msg-commentary-1",
             text="I will inspect the workspace.",
             phase="commentary",
         )
-        yield {
-            "method": "item/started",
-            "payload": {
-                "threadId": thread_id,
-                "turnId": turn_id,
-                "item": {
-                    "type": "commandExecution",
-                    "id": "call-1",
-                    "command": "pwd",
-                    "cwd": cwd,
-                    "status": "inProgress",
-                    "source": "model",
-                    "commandActions": [{"type": "unknown", "command": "pwd"}],
-                    "aggregatedOutput": None,
-                    "exitCode": None,
-                    "durationMs": None,
-                },
-            },
-        }
-        yield {
-            "method": "item/completed",
-            "payload": {
-                "threadId": thread_id,
-                "turnId": turn_id,
-                "item": {
-                    "type": "commandExecution",
-                    "id": "call-1",
-                    "command": "pwd",
-                    "cwd": cwd,
-                    "status": "completed",
-                    "source": "model",
-                    "commandActions": [{"type": "unknown", "command": "pwd"}],
-                    "aggregatedOutput": f"{cwd}\n",
-                    "exitCode": 0,
-                    "durationMs": 1,
-                },
-            },
-        }
-        yield _agent_message(
+        yield command_execution_started(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            item_id="call-1",
+            command="pwd",
+            cwd=cwd,
+        )
+        yield command_execution_completed(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            item_id="call-1",
+            command="pwd",
+            cwd=cwd,
+            output=f"{cwd}\n",
+        )
+        yield agent_message_completed(
             thread_id=thread_id,
             turn_id=turn_id,
             item_id="msg-final-1",
             text="Final answer.",
             phase="final_answer",
         )
-        yield {"method": "turn/completed", "payload": {"threadId": thread_id, "turn": {"id": turn_id}}}
-
-
-def _agent_message(*, thread_id: str, turn_id: str, item_id: str, text: str, phase: str) -> dict[str, Any]:
-    return {
-        "method": "item/completed",
-        "payload": {
-            "threadId": thread_id,
-            "turnId": turn_id,
-            "item": {
-                "type": "agentMessage",
-                "id": item_id,
-                "text": text,
-                "phase": phase,
-                "memoryCitation": None,
-            },
-        },
-    }
+        yield turn_completed(thread_id=thread_id, turn_id=turn_id)
 
 
 class LiveStreamTest(unittest.TestCase):
@@ -200,27 +160,16 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_projects_compaction_notification_to_anchor(self) -> None:
         class CompactingTurnStreamService(FakeTurnStreamService):
             def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str):
-                yield {"method": "turn/started", "payload": {"threadId": thread_id, "turn": {"id": "turn-compact"}}}
-                yield {
-                    "method": "item/completed",
-                    "payload": {
-                        "threadId": thread_id,
-                        "turnId": "turn-compact",
-                        "item": {
-                            "type": "contextCompaction",
-                            "id": "compact-1",
-                            "status": "completed",
-                        },
-                    },
-                }
-                yield _agent_message(
+                yield turn_started(thread_id=thread_id, turn_id="turn-compact")
+                yield context_compaction_completed(thread_id=thread_id, turn_id="turn-compact")
+                yield agent_message_completed(
                     thread_id=thread_id,
                     turn_id="turn-compact",
                     item_id="msg-final-compact",
                     text="Compacted.",
                     phase="final_answer",
                 )
-                yield {"method": "turn/completed", "payload": {"threadId": thread_id, "turn": {"id": "turn-compact"}}}
+                yield turn_completed(thread_id=thread_id, turn_id="turn-compact")
 
         async def run():
             store = InMemoryTapeStore()
@@ -252,7 +201,7 @@ if __name__ == "__main__":
 
 
 def _anchor_event(*, session_id: str, tape_id: str, anchor_id: str):
-    from bub_codex import make_tape_event
+    from bub_codex.tape_events import make_tape_event
 
     return make_tape_event(
         "bub.anchor.created",
@@ -264,7 +213,7 @@ def _anchor_event(*, session_id: str, tape_id: str, anchor_id: str):
 
 
 def _thread_bound_event(*, session_id: str, tape_id: str, anchor_id: str, thread_id: str):
-    from bub_codex import make_tape_event
+    from bub_codex.tape_events import make_tape_event
 
     return make_tape_event(
         "codex.thread.bound",

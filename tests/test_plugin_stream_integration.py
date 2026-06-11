@@ -11,13 +11,17 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (  # noqa: E402
-    BubCodexRuntime,
-    BubCodexRuntimeStreamService,
-    CodexTurn,
-    InMemoryTapeStore,
-    ThreadMaterialization,
-    run_plugin_stream_once,
+from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization  # noqa: E402
+from bub_codex.plugin import BubCodexRuntimeStreamService  # noqa: E402
+from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: E402
+from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
+from codex_record_builders import (  # noqa: E402
+    agent_message_completed,
+    command_execution_completed,
+    command_execution_started,
+    turn_completed,
+    turn_started,
 )
 
 
@@ -35,14 +39,8 @@ class FakeCodexThreadService:
             thread_id=thread_id,
             turn_id=turn_id,
             notification_records=(
-                {
-                    "method": "turn/started",
-                    "payload": {"threadId": thread_id, "turn": {"id": turn_id}},
-                },
-                {
-                    "method": "turn/completed",
-                    "payload": {"threadId": thread_id, "turn": {"id": turn_id}},
-                },
+                turn_started(thread_id=thread_id, turn_id=turn_id),
+                turn_completed(thread_id=thread_id, turn_id=turn_id),
             ),
         )
 
@@ -56,80 +54,37 @@ class FakeCodexThreadService:
             thread_id=thread_id,
             turn_id=turn_id,
             notification_records=(
-                {
-                    "method": "turn/started",
-                    "payload": {"threadId": thread_id, "turn": {"id": turn_id}},
-                },
-                {
-                    "method": "item/completed",
-                    "payload": {
-                        "threadId": thread_id,
-                        "turnId": turn_id,
-                        "item": {
-                            "type": "agentMessage",
-                            "id": f"assistant-message-{len(self.prompts)}",
-                            "text": f"assistant:{prompt}",
-                            "phase": "final_answer",
-                            "memoryCitation": None,
-                        },
-                    },
-                },
-                {
-                    "method": "item/started",
-                    "payload": {
-                        "threadId": thread_id,
-                        "turnId": turn_id,
-                        "item": {
-                            "type": "commandExecution",
-                            "id": "command-1",
-                            "command": "pwd",
-                            "cwd": cwd,
-                            "source": "model",
-                            "status": "inProgress",
-                            "commandActions": [{"type": "unknown", "command": "pwd"}],
-                            "aggregatedOutput": None,
-                            "exitCode": None,
-                            "durationMs": None,
-                        },
-                    },
-                },
-                {
-                    "method": "item/completed",
-                    "payload": {
-                        "threadId": thread_id,
-                        "turnId": turn_id,
-                        "item": {
-                            "type": "commandExecution",
-                            "id": "command-1",
-                            "command": "pwd",
-                            "cwd": cwd,
-                            "source": "model",
-                            "status": "completed",
-                            "commandActions": [{"type": "unknown", "command": "pwd"}],
-                            "aggregatedOutput": f"{cwd}\n",
-                            "exitCode": 0,
-                            "durationMs": 1,
-                        },
-                    },
-                },
-                {
-                    "method": "item/completed",
-                    "payload": {
-                        "threadId": thread_id,
-                        "turnId": turn_id,
-                        "item": {
-                            "type": "agentMessage",
-                            "id": f"assistant-message-final-{len(self.prompts)}",
-                            "text": f"final:{prompt}",
-                            "phase": "final_answer",
-                            "memoryCitation": None,
-                        },
-                    },
-                },
-                {
-                    "method": "turn/completed",
-                    "payload": {"threadId": thread_id, "turn": {"id": turn_id}},
-                },
+                turn_started(thread_id=thread_id, turn_id=turn_id),
+                agent_message_completed(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    item_id=f"assistant-message-{len(self.prompts)}",
+                    text=f"commentary:{prompt}",
+                    phase="commentary",
+                ),
+                command_execution_started(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    item_id="command-1",
+                    command="pwd",
+                    cwd=cwd,
+                ),
+                command_execution_completed(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    item_id="command-1",
+                    command="pwd",
+                    cwd=cwd,
+                    output=f"{cwd}\n",
+                ),
+                agent_message_completed(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    item_id=f"assistant-message-final-{len(self.prompts)}",
+                    text=f"final:{prompt}",
+                    phase="final_answer",
+                ),
+                turn_completed(thread_id=thread_id, turn_id=turn_id),
             ),
         )
 
@@ -152,8 +107,8 @@ class PluginStreamIntegrationTest(unittest.TestCase):
 
         result, threads = asyncio.run(run())
 
-        self.assertEqual(result.text, "assistant:hello\nfinal:hello")
-        self.assertEqual(result.final_text, "assistant:hello\nfinal:hello")
+        self.assertEqual(result.text, "final:hello")
+        self.assertEqual(result.final_text, "final:hello")
         self.assertEqual(threads.created, ["codex-thread-1"])
         self.assertEqual(threads.prompts, ["hello"])
         self.assertEqual(

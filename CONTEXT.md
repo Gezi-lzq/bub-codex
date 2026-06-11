@@ -10,7 +10,7 @@ The project should avoid treating Codex as an opaque command invoked through `co
 
 Bub is a hook-first runtime for collaborative agents. Its model emphasizes explicit runtime stages, shared environments, and recorded context. `bub-contrib` already contains a Codex-related package, but that package delegates model execution to the Codex CLI. This repo is for the deeper integration path.
 
-Tape Systems contributes the context model: durable, append-only facts that can support observability, evaluation, and training. Obelisk contributes a related agent-history lens: sessions, messages, tool calls, subagents, workflows, file history, failures, and parent chains should be queryable by agents. Langfuse's Codex observability plugin is a useful reference for structured tracing of Codex turns and tools.
+Tape Systems contributes the context model: durable, append-only facts that can support observability, evaluation, and training. Obelisk contributes a related agent-history lens: sessions, messages, tool calls, subagents, workflows, file history, failures, and parent chains should be queryable by agents. Langfuse's Codex observability plugin is a useful reference for structured tracing of Codex turns and tools. Multica's Codex daemon integration is a useful reference for production runtime hardening: per-task execution environments, `CODEX_HOME` management, Codex config blocks, liveness diagnostics, and session pinning. It should not replace the tape-first event model because it records a narrower task-message stream rather than a canonical event log.
 
 ## Ubiquitous Language
 
@@ -27,6 +27,7 @@ Tape Systems contributes the context model: durable, append-only facts that can 
 - **Tool call**: A structured request by the agent to perform an external action.
 - **Observability event**: Structured telemetry about runtime behavior, suitable for tracing, debugging, evaluation, or replay.
 - **Session history**: The durable, queryable record of past work.
+- **Translator**: A Module that converts one runtime representation into another while preserving source attribution and ordering. In `bub-codex`, the Codex turn Translator owns the source-signal-to-tape/stream interpretation so callers do not need to know raw Codex notification shape.
 
 ## Product Boundary
 
@@ -62,7 +63,7 @@ Still spike-shaped:
 
 - Most executable proof lives under `scripts/spikes/*`.
 - The tape store is still `InMemoryTapeStore`.
-- The current runtime bridge batches notifications until `turn/completed`.
+- `BubCodexRuntime.run_turn()` still batches notifications until `turn/completed`; this is a reference/spike path for validating runtime and projection rules, not the MVP production stream path.
 - Real SDK smoke tests are manual and external-runtime dependent.
 - There is no installable/configurable Bub plugin MVP yet.
 
@@ -109,7 +110,7 @@ Representative research summary:
 - `BubCodexRuntime.run_turn()` is the first ordinary user-turn facade. It reuses `ensure_thread_context()`, runs a Codex turn, normalizes notifications into `CodexFact`, projects `codex.turn.started/completed` with `purpose=user_turn`, and reuses tool/side-effect projection.
 - The first Bub plugin integration should implement `run_model_stream` only, delegate comma commands back to the builtin agent, avoid overriding `load_state` / `build_prompt` / outbound hooks, use Bub `REGISTRY` as the tool source, and let HookRuntime consume the stream for non-streaming calls.
 - `src/bub_codex/plugin.py` now provides the minimal `BubCodexPlugin` skeleton. It exposes only `run_model_stream`, delegates comma commands to `state["_runtime_agent"].run(...)`, and delegates normal prompts to an injected `RuntimeStreamService`.
-- `BubCodexRuntimeStreamService` connects `BubCodexPlugin` to `BubCodexRuntime.run_turn()`. The offline end-to-end spike using real `BubFramework` and fake `CodexThreadService` now appends bootstrap Anchor, context materialization, thread binding, and user turn events into `InMemoryTapeStore`.
+- `BubCodexRuntimeStreamService` connects `BubCodexPlugin` to `BubCodexRuntime.run_turn()` for reference/spike tests. It is not the MVP production runtime path; when it emits Bub stream events, it reuses the Codex turn Translator's final-answer semantics so batch/reference behavior does not diverge from the live bridge.
 - Codex SDK supports live turn notification streaming; the current `BubCodexRuntime.run_turn()` path intentionally batches notifications until `turn/completed` only as a temporary adapter shape for validating projection rules. A Bub-native coding runtime should grow a live notification bridge that consumes Codex events as they arrive, appends tape events in source order, and yields Bub stream/progress events without waiting for the whole turn to finish.
 - `agentMessage` items carry `phase=commentary | final_answer | null` from Codex. `phase=final_answer` is a Codex-provided semantic marker, not inferred by Bub. Tape should preserve all assistant message completions in order, while Bub `final.text` should prefer `phase=final_answer` and fall back to the last assistant message if no final-answer phase is available.
 - `BubCodexLiveRuntimeStreamService` is the first live notification bridge spike. It reuses `ensure_thread_context()`, consumes ordinary user-turn notification records as they arrive, appends projected tape events immediately in source order, keeps `phase=commentary` out of `StreamEvent("text")`, and emits `phase=final_answer` as Bub `text` and `final.text`. This validates the live bridge direction but does not yet replace the default batch service as production runtime.
@@ -124,6 +125,11 @@ Representative research summary:
 - `RepublicTapeStoreAdapter` 已通过 Bub `FileTapeStore` 持久化读回测试，可从真实 Republic tape entries 还原 `bub-codex` 事件并仅从 tape 推导 `resume_thread` runtime context。
 - Resume existing Codex thread 的 MVP 语义已有 live bridge 测试：当 tape 中存在 latest Anchor 与 `codex.thread.bound`，runtime 不 materialize 新 thread，而是调用 `resume_thread(thread_id)` 后继续 ordinary turn。
 - Codex stream 中的 `contextCompaction` completed item 会投影为 `codex.thread.compacted` 与新的 `bub.anchor.created(method=compact, reason=auto_compact, initiator=codex_runtime)`。
+- Codex turn Translator 的外部 Interface 应输入 raw Codex notification record，并在 Implementation 内部拥有 `raw notification -> CodexFact -> TapeEvent -> Bub stream decision` 的解释链。这样 `live_stream` 不需要知道 Codex raw shape、adapter fact 中间形态或 final-answer collection 规则，保持高内聚。
+- Codex turn Translator 的输出 Interface 应是 `TapeEvent[] + StreamDecision[]`，而不是直接输出 Republic `StreamEvent`。Translator 负责语义决策，`live_stream` 负责把 `StreamDecision` 转成 Bub/Republic transport object。
+- Codex turn Translator 应是 per-turn 有状态 Module，生命周期为 `accept(record)` 多次加 `finish()` 一次。Translator 内部持有 final-answer texts 与 fallback text，`live_stream` 不再知道 `phase=final_answer`、fallback text 或 final aggregation 规则。
+- Package root `bub_codex` should stay narrow and expose plugin-facing entrypoints, not projection helpers, tape internals, runtime adapters, or spike-only utilities. Tests and spike scripts should import internal Modules directly when they need internal surfaces.
+- Multica's Codex integration suggests a future `CodexEnvironment` Module, but not for the first MVP. Its strongest lessons are platform-aware sandbox/config handling, managed `config.toml` blocks, current-thread notification filtering, semantic inactivity diagnostics, and early session/thread pinning. `bub-codex` should absorb those as hardening inputs while keeping Bub tape as the canonical record.
 - v0 may parse Codex internal rollout format to enrich compaction Anchors with Codex compact summaries, but this must live behind a versioned adapter and fail open.
 - If compaction snapshot parsing fails, v0 records summary failure status and does not automatically run a Bub-generated second summary.
 - Maximum local permission is acceptable for v0; approval UX and policy governance are later layers.
@@ -143,6 +149,7 @@ Representative research summary:
 - Which `ToolContext.state` keys should become stable for Codex dynamic tool calls?
 - Should Bub dynamic tool handlers have a host-level timeout/cancellation wrapper in v0?
 - What is the exact live bridge contract from Codex notifications to Bub `AsyncStreamEvents`, especially commentary/progress versus final answer text?
+- When should `bub-codex` introduce a `CodexEnvironment` Module, and which responsibilities belong there versus Bub plugin settings?
 
 ## ADR Index
 

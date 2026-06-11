@@ -11,7 +11,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (
+from bub_codex.runtime_adapter import (
     facts_from_notification_record,
     facts_from_server_request_record,
     load_compaction_snapshots,

@@ -14,6 +14,7 @@ from .config import BubCodexSettings, load_settings
 from .republic_tape_store import RepublicTapeStoreAdapter
 from .runtime import BubCodexRuntime, RuntimeTurnResult
 from .tape_store import InMemoryTapeStore
+from .turn_translator import StreamDecision, stream_success_decisions_from_tape_events
 
 
 def create_plugin(framework: Any) -> "BubCodexPlugin":
@@ -154,10 +155,13 @@ def build_runtime_stream_service(
 
 
 def stream_runtime_turn_result(result: RuntimeTurnResult) -> AsyncStreamEvents:
-    text = _assistant_text_from_turn_result(result)
-    if not text:
-        text = f"codex turn completed: {result.turn_id}"
-    return stream_text(text)
+    decisions = stream_success_decisions_from_tape_events(result.appended_events)
+
+    async def iterator():
+        for decision in decisions:
+            yield _to_stream_event(decision)
+
+    return AsyncStreamEvents(iterator(), state=StreamState())
 
 
 async def _run_comma_command(prompt: str | list[dict], *, session_id: str, state: State) -> AsyncStreamEvents:
@@ -208,14 +212,8 @@ def _prompt_text(prompt: str | list[dict]) -> str:
     return "\n".join(str(part.get("text", "")) for part in prompt if isinstance(part, dict) and part.get("type") == "text")
 
 
-def _assistant_text_from_turn_result(result: RuntimeTurnResult) -> str:
-    texts: list[str] = []
-    for event in result.appended_events:
-        payload = event.payload
-        text = payload.get("assistant_text")
-        if isinstance(text, str) and text:
-            texts.append(text)
-    return "\n".join(texts)
+def _to_stream_event(decision: StreamDecision) -> StreamEvent:
+    return StreamEvent(decision.kind, decision.data)
 
 
 def _runtime_tape_store(framework: Any, settings: BubCodexSettings):

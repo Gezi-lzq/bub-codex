@@ -16,7 +16,7 @@ from bub.channels.message import ChannelMessage
 from bub.framework import BubFramework
 from bub.hookspecs import hookimpl
 
-from bub_codex import BubCodexPlugin, stream_text
+from bub_codex.plugin import BubCodexPlugin, stream_text
 
 
 @dataclass

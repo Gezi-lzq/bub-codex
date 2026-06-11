@@ -15,13 +15,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (  # noqa: E402
-    BubCodexRuntime,
-    BubCodexRuntimeStreamService,
-    InMemoryTapeStore,
-    MaterializingCodexThreadService,
-    run_plugin_stream_once,
-)
+from bub_codex.codex_thread_service import MaterializingCodexThreadService  # noqa: E402
+from bub_codex.plugin import BubCodexRuntimeStreamService  # noqa: E402
+from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: E402
+from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 
 DEFAULT_SDK_PYTHON_DIR = Path("/tmp/bub-codex-sources/openai-codex/sdk/python")
 

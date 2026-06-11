@@ -12,12 +12,9 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex import (
-    DynamicToolCall,
-    build_bub_dynamic_tool_provider,
-    make_bub_tool_context,
-    project_bub_tool_invocation_records,
-)
+from bub_codex.bub_tool_audit_projection import project_bub_tool_invocation_records
+from bub_codex.bub_tools import build_bub_dynamic_tool_provider, make_bub_tool_context
+from bub_codex.codex_client import DynamicToolCall
 
 
 @dataclass(frozen=True, slots=True)
