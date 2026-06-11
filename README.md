@@ -65,6 +65,10 @@ The project currently depends on the Codex SDK from the Codex repository:
 openai-codex @ git+https://github.com/openai/codex.git#subdirectory=sdk/python
 ```
 
+If startup fails with `openai_codex SDK is not importable`, install the Codex
+SDK dependency or set `BUB_CODEX_SDK_PYTHON_PATH` to a local Codex SDK checkout.
+If Codex cannot start, first verify that `codex` is on `PATH` and authenticated.
+
 ## Configuration
 
 The plugin reads Bub config under the `codex` section and environment variables
@@ -169,6 +173,29 @@ Expected output:
 ```text
 OK: Bub discovered installed bub-codex plugin (run_model_stream: builtin, codex).
 ```
+
+After plugin discovery, run one real chat turn:
+
+```bash
+uv run bub --workspace "$PWD" chat --session-id bub-codex-smoke
+```
+
+Expected behavior:
+
+- `bub hooks` lists `codex` under `run_model_stream`
+- normal chat prompts are handled by Codex
+- comma commands such as `,help` are still handled by Bub
+
+Common setup failures:
+
+- `openai_codex SDK is not importable`: install the Codex SDK dependency or set
+  `BUB_CODEX_SDK_PYTHON_PATH`
+- `workspace is not available`: pass `--workspace`, set `BUB_CODEX_WORKSPACE`,
+  or run inside a Bub workspace
+- async Republic tape store unsupported: use a sync-compatible Bub tape store
+  for the current v0 runtime
+- Codex startup/authentication failure: verify `BUB_CODEX_CODEX_BIN` and run the
+  Codex CLI authentication flow first
 
 Run local checks:
 

@@ -59,6 +59,47 @@ prompt + session_id + Bub state
   -> close the Codex turn session
 ```
 
+## Codex SDK Boundary
+
+`bub-codex` integrates with the Codex Python SDK through
+`openai_codex.client.CodexConfig` and `CodexClient`.
+
+Runtime construction passes the following values into `CodexConfig`:
+
+- `codex_bin`: optional path to the Codex CLI binary
+- `cwd`: resolved Bub workspace
+- `config_overrides`: approval policy, sandbox mode, and user overrides
+- `env`: optional environment overrides
+- `experimental_api=True`
+
+The runtime then constructs `CodexClient(config=...)`, calls `client.start()`,
+and calls `client.initialize()`. This happens lazily inside Bub's turn lifecycle,
+not at Python import time.
+
+Thread continuity is handled by `MaterializingCodexThreadService`:
+
+```text
+new thread materialization
+  -> client.thread_start(...)
+  -> client.turn_start(thread_id, materialization_prompt, {"cwd": cwd})
+  -> client.next_turn_notification(turn_id) until turn/completed
+  -> client.unregister_turn_notifications(turn_id)
+  -> client.thread_read(thread_id, include_turns=True)
+  -> write codex.thread.bound
+
+existing thread resume
+  -> client.thread_resume(thread_id, {"cwd": cwd, "approvalPolicy": ..., "sandbox": ...})
+
+user turn streaming
+  -> client.turn_start(thread_id, prompt, {"cwd": cwd})
+  -> client.next_turn_notification(turn_id) until turn/completed
+  -> client.unregister_turn_notifications(turn_id)
+```
+
+The materialization turn is separate from the user turn. It exists only to make
+the new Codex thread resumable and to bind it to a Bub Anchor. The user's prompt
+is sent in the later user turn.
+
 ## Identity Model
 
 The runtime keeps these identities separate:
@@ -120,7 +161,19 @@ filtered before translation.
 
 ## Tape Events
 
-Tape events are projected from normalized Codex facts and runtime decisions.
+Tape events are projected in three steps:
+
+```text
+Codex SDK notification record
+  -> CodexFact
+  -> Bub TapeEvent
+  -> optional Bub stream decision
+```
+
+`runtime_adapter.py` normalizes SDK notification records into `CodexFact`
+objects. Projection modules then decide which facts become durable tape events.
+`CodexTurnTranslator` also derives Bub stream decisions from projected events.
+
 Important event families include:
 
 - `bub.anchor.creation.started`
@@ -133,6 +186,10 @@ Important event families include:
 - `codex.assistant_message.completed`
 - `bub.tool.call.started`
 - `bub.tool.call.completed`
+- `bub.tool.call.failed`
+- `bub.side_effect.started`
+- `bub.side_effect.completed`
+- `bub.side_effect.failed`
 - `codex.thread.compacted`
 - `codex.compaction.snapshot`
 - `bub.runtime.error`
@@ -140,6 +197,34 @@ Important event families include:
 Tape append happens before the corresponding Bub stream event is emitted. The
 tape preserves commentary, final answers, tool calls, runtime diagnostics, and
 compaction boundaries even when only final-answer text is displayed to the user.
+
+## Notification Projection
+
+The current user-turn projection is intentionally conservative. It persists
+turn lifecycle, completed assistant messages, tool/side-effect lifecycle, and
+compaction boundaries. Some SDK notifications are normalized for future use but
+are not yet persisted as user-turn tape events.
+
+| Codex SDK notification | Normalized fact | Bub tape / stream result |
+| --- | --- | --- |
+| `turn/started` | `codex.turn.started` | `codex.turn.started` |
+| `turn/completed` | `codex.turn.completed` | `codex.turn.completed`, then final Bub stream event |
+| `item/started` for tool-like items | `codex.item.started` | `bub.tool.call.started` |
+| `item/completed` for tool-like items | `codex.item.completed` | `bub.tool.call.completed` or `bub.tool.call.failed` |
+| `item/started` / `item/completed` for `fileChange` | `codex.item.*` | `bub.side_effect.started`, `bub.side_effect.completed`, or `bub.side_effect.failed` |
+| `item/completed` for `agentMessage` | `codex.assistant_message.completed` | `codex.assistant_message.completed`; final-answer text may be emitted to Bub |
+| `item/agentMessage/delta` | `codex.assistant_message.delta` | Bub `text` delta only when `phase=final_answer`; not persisted as a tape event |
+| `item/completed` for `contextCompaction` | `codex.thread.compacted` | compact Anchor, `codex.thread.compacted`, optional `codex.compaction.snapshot`, and `codex.thread.bound(reason=compact_continuity)` |
+| `thread/tokenUsage/updated` | `codex.token_usage.updated` | normalized only; not persisted by current user-turn projection |
+| `item/commandExecution/outputDelta` | `codex.command_output.delta` | normalized only; not persisted by current user-turn projection |
+| `item/fileChange/patchUpdated` | `codex.file_change.patch_updated` | normalized only; not persisted by current user-turn projection |
+| `turn/diff/updated` | `codex.turn.diff.updated` | normalized only; not persisted by current user-turn projection |
+| `error` | `codex.error.observed` | normalized only; runtime boundary errors are persisted as `bub.runtime.error` |
+| unrecognized method | `codex.notification.observed` | normalized only; not persisted by current user-turn projection |
+
+Tool-like item types currently include `commandExecution`, `mcpToolCall`,
+`dynamicToolCall`, `collabAgentToolCall`, `webSearch`, and `imageView`.
+`fileChange` is treated as a side effect rather than a tool call.
 
 ## Assistant Message Phases
 
