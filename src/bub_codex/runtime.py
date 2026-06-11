@@ -11,6 +11,7 @@ from .context_materialization import (
 from .codex_thread_service import CodexTurn, ThreadMaterialization
 from .materialization_projection import project_thread_materialization_events
 from .runtime_adapter import facts_from_notification_record
+from .runtime_diagnostics import runtime_error_event
 from .runtime_resolution import RuntimeContextResolution
 from .tape_events import JsonObject, TapeEvent
 from .tape_store import TapeStore
@@ -84,7 +85,19 @@ class BubCodexRuntime:
 
         if resolution.action == "resume_thread":
             assert resolution.thread_id is not None
-            self.codex_threads.resume_thread(resolution.thread_id)
+            try:
+                self.codex_threads.resume_thread(resolution.thread_id)
+            except Exception as exc:
+                diagnostic = runtime_error_event(
+                    stage="thread_resume",
+                    exc=exc,
+                    session_id=session_id,
+                    tape_id=tape_id,
+                    anchor_id=resolution.anchor_id,
+                    thread_id=resolution.thread_id,
+                )
+                self.tape_store.append(diagnostic)
+                raise
             return RuntimeStartResult(
                 status="resumed",
                 resolution=resolution,

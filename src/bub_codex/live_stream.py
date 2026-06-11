@@ -10,6 +10,7 @@ from bub.types import State
 from .plugin import _default_tape_id, _prompt_text
 from .runtime import BubCodexRuntime
 from .notification_filter import record_belongs_to_thread
+from .runtime_diagnostics import runtime_error_event
 from .tape_events import JsonObject
 from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
 
@@ -89,17 +90,32 @@ async def _iter_live_turn_events(
         tape_id=tape_id,
         anchor_id=anchor_id,
     )
-    for record in stream_service.run_turn_stream_records(
-        thread_id=thread_id,
-        cwd=cwd,
-        prompt=prompt,
-    ):
-        if not record_belongs_to_thread(record, thread_id):
-            continue
-        translation = translator.accept(record)
-        runtime.tape_store.append_many(translation.tape_events)
-        for decision in translation.stream_decisions:
+    try:
+        for record in stream_service.run_turn_stream_records(
+            thread_id=thread_id,
+            cwd=cwd,
+            prompt=prompt,
+        ):
+            if not record_belongs_to_thread(record, thread_id):
+                continue
+            translation = translator.accept(record)
+            runtime.tape_store.append_many(translation.tape_events)
+            for decision in translation.stream_decisions:
+                yield _to_stream_event(decision)
+    except Exception as exc:
+        runtime.tape_store.append(
+            runtime_error_event(
+                stage="turn_stream",
+                exc=exc,
+                session_id=session_id,
+                tape_id=tape_id,
+                anchor_id=anchor_id,
+                thread_id=thread_id,
+            )
+        )
+        for decision in stream_error_decisions(exc):
             yield _to_stream_event(decision)
+        return
     for decision in translator.finish().stream_decisions:
         yield _to_stream_event(decision)
 

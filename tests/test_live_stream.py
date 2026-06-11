@@ -117,6 +117,12 @@ class ForeignThreadTurnStreamService:
         yield turn_completed(thread_id=thread_id, turn_id="user-turn-1")
 
 
+class FailingTurnStreamService:
+    def run_turn_stream_records(self, *, thread_id: str, cwd: str, prompt: str):
+        yield turn_started(thread_id=thread_id, turn_id="user-turn-1")
+        raise RuntimeError("codex stream stopped")
+
+
 class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_writes_commentary_to_tape_but_only_streams_final_answer(self) -> None:
         async def run():
@@ -223,8 +229,13 @@ class LiveStreamTest(unittest.TestCase):
         self.assertFalse(result.stream_events[-1].data["ok"])
         self.assertEqual(
             [event.type for event in result.tape_events],
-            ["bub.anchor.created", "codex.thread.bound"],
+            ["bub.anchor.created", "codex.thread.bound", "bub.runtime.error"],
         )
+        diagnostic = result.tape_events[-1]
+        self.assertEqual(diagnostic.payload["stage"], "thread_resume")
+        self.assertEqual(diagnostic.payload["error_type"], "RuntimeError")
+        self.assertEqual(diagnostic.payload["message"], "cannot resume codex-thread-existing")
+        self.assertEqual(diagnostic.thread_id, "codex-thread-existing")
 
     def test_live_bridge_materializes_thread_from_latest_anchor_without_binding(self) -> None:
         async def run():
@@ -324,6 +335,31 @@ class LiveStreamTest(unittest.TestCase):
                 for event in result.tape_events
             )
         )
+
+    def test_live_bridge_records_runtime_error_when_turn_stream_fails(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(runtime, FailingTurnStreamService())
+            return await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={"_runtime_workspace": "/workspace"},
+                tape_store=store,
+            )
+
+        result = asyncio.run(run())
+        diagnostic = result.tape_events[-1]
+
+        self.assertEqual([event.kind for event in result.stream_events[-3:]], ["error", "text", "final"])
+        self.assertEqual(result.final_text, "RuntimeError: codex stream stopped")
+        self.assertFalse(result.stream_events[-1].data["ok"])
+        self.assertEqual(diagnostic.type, "bub.runtime.error")
+        self.assertEqual(diagnostic.payload["stage"], "turn_stream")
+        self.assertEqual(diagnostic.payload["error_type"], "RuntimeError")
+        self.assertEqual(diagnostic.payload["message"], "codex stream stopped")
+        self.assertEqual(diagnostic.thread_id, "codex-thread-1")
 
 
 if __name__ == "__main__":
