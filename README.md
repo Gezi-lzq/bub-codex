@@ -70,10 +70,12 @@ spike 模块。
 
 ```bash
 uv pip install -e .
-uv run bub hooks
+BUB_CODEX_ENABLED=false python scripts/verify_installed_plugin.py
 ```
 
-`bub hooks` 应该包含：
+这个检查只验证 Bub 能从已安装的 package entry point 发现 `codex` 插件；
+`BUB_CODEX_ENABLED=false` 会避免启动真实 Codex runtime。脚本内部运行
+`python -m bub hooks`，并断言输出包含：
 
 ```text
 run_model_stream: builtin, codex
