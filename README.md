@@ -34,6 +34,10 @@ For local development:
 uv pip install -e .
 ```
 
+Bub discovers plugins from the active Python environment. If `bub hooks` does
+not show `codex`, install this package into the environment that runs the `bub`
+command, then run the hook check again.
+
 Bub loads plugins through the `bub` entry point group:
 
 ```toml
@@ -44,7 +48,8 @@ codex = "bub_codex.plugin:create_plugin"
 ## Prerequisites
 
 - Python 3.12+
-- Bub
+- Bub 0.3.8+
+- Republic 0.5.8+
 - Codex CLI installed and authenticated
 - Codex Python SDK importable as `openai_codex`
 
@@ -127,7 +132,15 @@ Check that Bub loaded the plugin:
 uv run bub hooks
 ```
 
-The report should include `codex` under `run_model_stream`.
+The report should include `codex` under `run_model_stream`. On Bub versions
+with turn admission support, it should also include `codex` under
+`admit_message`.
+
+The repository also includes a focused installed-plugin check:
+
+```bash
+uv run python scripts/verify_installed_plugin.py
+```
 
 Run one real chat turn:
 

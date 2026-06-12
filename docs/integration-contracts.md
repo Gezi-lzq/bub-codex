@@ -6,6 +6,19 @@ depend on the parts listed here. Everything else is an implementation detail.
 
 ## Bub Contract
 
+The supported baseline is Bub 0.3.8 or newer. The plugin is packaged as a
+normal Bub entry point:
+
+```toml
+[project.entry-points."bub"]
+codex = "bub_codex.plugin:create_plugin"
+```
+
+Bub calls the entry point as a framework-aware factory and registers the
+returned plugin object. This is the documented callable plugin shape; it lets
+the plugin read the active workspace and tape store after Bub has processed CLI
+configuration.
+
 `bub-codex` implements Bub's `run_model_stream` hook:
 
 ```python
