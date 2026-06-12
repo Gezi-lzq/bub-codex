@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Bub-native Codex runtime plugin"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
 dependencies = [
     "bub>=0.3.8",
     "openai-codex @ git+https://github.com/openai/codex.git#subdirectory=sdk/python",
