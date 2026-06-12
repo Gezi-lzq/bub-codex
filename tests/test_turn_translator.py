@@ -13,7 +13,8 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 from codex_record_builders import agent_message_completed, agent_message_delta, context_compaction_completed  # noqa: E402
-from bub_codex.turn_translator import CodexTurnTranslator  # noqa: E402
+from bub_codex.tape_events import make_tape_event  # noqa: E402
+from bub_codex.turn_translator import CodexTurnTranslator, stream_success_decisions_from_tape_events  # noqa: E402
 
 
 class CodexTurnTranslatorTest(unittest.TestCase):
@@ -159,6 +160,7 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertIn("codex.thread.compacted", event_types)
         self.assertEqual(len(compact_anchors), 1)
         self.assertEqual(compact_anchors[0].payload["reason"], "auto_compact")
+        self.assertNotIn("snapshot_fact_id", compact_anchors[0].payload["refs"])
         compact_bindings = [
             event
             for event in result.tape_events
@@ -167,6 +169,47 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertEqual(len(compact_bindings), 1)
         self.assertEqual(compact_bindings[0].anchor_id, compact_anchors[0].anchor_id)
         self.assertEqual(compact_bindings[0].thread_id, compact_anchors[0].thread_id)
+        self.assertNotIn("snapshot_fact_id", compact_bindings[0].payload["refs"])
+
+    def test_success_fallback_uses_event_turn_id_when_no_assistant_text_exists(self) -> None:
+        decisions = stream_success_decisions_from_tape_events(
+            (
+                make_tape_event(
+                    "codex.turn.completed",
+                    payload={"purpose": "user_turn"},
+                    session_id="session-1",
+                    tape_id="tape-1",
+                    turn_id="turn-1",
+                ),
+            )
+        )
+
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in decisions],
+            [
+                ("text", {"delta": "codex turn completed: turn-1"}),
+                ("final", {"text": "codex turn completed: turn-1", "ok": True}),
+            ],
+        )
+
+    def test_success_decisions_accept_one_shot_event_iterables(self) -> None:
+        event = make_tape_event(
+            "codex.assistant_message.completed",
+            payload={"assistant_text": "Done.", "phase": "final_answer"},
+            session_id="session-1",
+            tape_id="tape-1",
+            turn_id="turn-1",
+        )
+
+        decisions = stream_success_decisions_from_tape_events(iter([event]))
+
+        self.assertEqual(
+            [(decision.kind, decision.data) for decision in decisions],
+            [
+                ("text", {"delta": "Done."}),
+                ("final", {"text": "Done.", "ok": True}),
+            ],
+        )
 
 
 def _translator() -> CodexTurnTranslator:

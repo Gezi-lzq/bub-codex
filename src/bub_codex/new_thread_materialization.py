@@ -1,10 +1,126 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Iterable
 
-from .tape_events import JsonObject, TapeEvent, make_tape_event
+from .json_utils import JsonObject, canonical_json, dict_or_empty, sha256_text
+from .tape_events import TapeEvent, make_tape_event
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedContextInput:
+    """Anchor context selected once and reused for Codex input and tape evidence."""
+
+    anchor: TapeEvent
+    selected_refs: tuple[str, ...]
+    workspace_metadata: JsonObject
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadBindingEvents:
+    materialization_id: str
+    materialized: TapeEvent
+    bound: TapeEvent
+
+
+@dataclass(frozen=True, slots=True)
+class ThreadBindFailureEvents:
+    materialization_id: str
+    materialized: TapeEvent
+    failed: TapeEvent
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorCreationEvents:
+    started: TapeEvent
+    created: TapeEvent
+
+
+def create_new_thread_anchor_events(
+    tape_events: Iterable[TapeEvent],
+    *,
+    session_id: str,
+    tape_id: str,
+    reason: str,
+    intent: str,
+    summary: str | None = None,
+    source_event_refs: list[str] | None = None,
+    owner: str = "human",
+    initiator: str = "human",
+    occurred_at: str | None = None,
+) -> AnchorCreationEvents:
+    """Create the Anchor side of an Anchor + new_thread handoff."""
+
+    event_list = list(tape_events)
+    source_refs = list(source_event_refs or [])
+    previous_anchor = latest_anchor_created(event_list)
+    previous_thread_id = (
+        active_thread_id_for_anchor(event_list, previous_anchor.anchor_id)
+        if previous_anchor
+        else None
+    )
+    anchor_creation_id = _anchor_stable_id(
+        "anchor_creation",
+        {
+            "session_id": session_id,
+            "tape_id": tape_id,
+            "method": "new_thread",
+            "reason": reason,
+            "intent": intent,
+            "previous_anchor_id": previous_anchor.anchor_id if previous_anchor else None,
+            "previous_thread_id": previous_thread_id,
+            "source_event_refs": source_refs,
+        },
+    )
+    anchor_id = _anchor_stable_id("anchor", anchor_creation_id)
+
+    started = make_tape_event(
+        "bub.anchor.creation.started",
+        payload={
+            "anchor_creation_id": anchor_creation_id,
+            "method": "new_thread",
+            "initiator": initiator,
+            "reason": reason,
+            "active_anchor_id_before": previous_anchor.anchor_id if previous_anchor else None,
+            "active_thread_id_before": previous_thread_id,
+            "intent_sha256": sha256_text(intent),
+            "source_event_refs": source_refs,
+        },
+        occurred_at=occurred_at,
+        session_id=session_id,
+        tape_id=tape_id,
+        thread_id=previous_thread_id,
+    )
+    created = make_tape_event(
+        "bub.anchor.created",
+        payload={
+            "anchor_id": anchor_id,
+            "method": "new_thread",
+            "reason": reason,
+            "created_at": occurred_at,
+            "state": {
+                "owner": owner,
+                "summary": summary,
+                "summary_status": "ok" if summary else "unavailable",
+            },
+            "refs": {
+                "source_anchor_creation_id": anchor_creation_id,
+                "previous_anchor_id": previous_anchor.anchor_id if previous_anchor else None,
+                "previous_thread_id": previous_thread_id,
+                "intent_sha256": sha256_text(intent),
+                "source_event_refs": source_refs,
+            },
+            "initiator": initiator,
+        },
+        occurred_at=occurred_at,
+        session_id=session_id,
+        tape_id=tape_id,
+        anchor_id=anchor_id,
+        thread_id=previous_thread_id,
+    )
+    return AnchorCreationEvents(started=started, created=created)
 
 
 def materialize_thread_binding_events(
@@ -14,57 +130,35 @@ def materialize_thread_binding_events(
     tape_id: str,
     thread_id: str,
     intent: str,
-    workspace_metadata: JsonObject | None = None,
-    anchor_id: str | None = None,
+    materialized_context: MaterializedContextInput,
     reason: str = "anchor_materialization",
     materialization_turn_id: str | None = None,
     occurred_at: str | None = None,
-    recent_event_limit: int = 8,
-) -> list[TapeEvent]:
+) -> ThreadBindingEvents:
     """Materialize a Codex thread from a committed Anchor and bind it to tape."""
 
     event_list = list(tape_events)
-    anchor = find_anchor_created(event_list, anchor_id) if anchor_id else latest_anchor_created(event_list)
-    if anchor is None:
-        raise ValueError("cannot materialize Codex thread without a committed Anchor")
-
+    anchor = materialized_context.anchor
     previous_thread_id = active_thread_id_for_anchor(event_list, anchor.anchor_id)
-    selected_refs = select_context_refs(event_list, anchor, recent_event_limit=recent_event_limit)
     materialization_id = _stable_id(
         "materialization",
         {
             "anchor_id": anchor.anchor_id,
             "thread_id": thread_id,
             "intent": intent,
-            "selected_refs": selected_refs,
+            "selected_refs": list(materialized_context.selected_refs),
         },
-    )
-    materialized_input = build_initial_input(
-        anchor=anchor,
-        intent=intent,
-        selected_refs=selected_refs,
-        workspace_metadata=workspace_metadata or {},
     )
 
-    materialized = make_tape_event(
-        "bub.context.materialized",
-        payload={
-            "materialization_id": materialization_id,
-            "anchor_id": anchor.anchor_id,
-            "strategy": "anchor_state_plus_selected_tape_refs",
-            "selected_fact_refs": selected_refs,
-            "input_sha256": _sha256_text(materialized_input),
-            "intent_sha256": _sha256_text(intent),
-            "token_estimate": _rough_token_estimate(materialized_input),
-            "workspace_metadata": workspace_metadata or {},
-            "refs": {
-                "materialization_turn_id": materialization_turn_id,
-            },
-        },
-        occurred_at=occurred_at,
+    materialized = _context_materialized_event(
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=anchor.anchor_id,
+        materialization_id=materialization_id,
+        materialized_context=materialized_context,
+        intent=intent,
+        materialization_turn_id=materialization_turn_id,
+        occurred_at=occurred_at,
     )
     bound = make_tape_event(
         "codex.thread.bound",
@@ -85,62 +179,44 @@ def materialize_thread_binding_events(
         anchor_id=anchor.anchor_id,
         thread_id=thread_id,
     )
-    return [materialized, bound]
+    return ThreadBindingEvents(
+        materialization_id=materialization_id,
+        materialized=materialized,
+        bound=bound,
+    )
 
 
 def materialize_thread_binding_failed_events(
-    tape_events: Iterable[TapeEvent],
     *,
     session_id: str,
     tape_id: str,
     intent: str,
     error: JsonObject,
-    workspace_metadata: JsonObject | None = None,
-    anchor_id: str | None = None,
+    materialized_context: MaterializedContextInput,
     reason: str = "anchor_materialization",
     occurred_at: str | None = None,
-    recent_event_limit: int = 8,
-) -> list[TapeEvent]:
+) -> ThreadBindFailureEvents:
     """Record failed thread materialization without invalidating the Anchor."""
 
-    event_list = list(tape_events)
-    anchor = find_anchor_created(event_list, anchor_id) if anchor_id else latest_anchor_created(event_list)
-    if anchor is None:
-        raise ValueError("cannot materialize Codex thread without a committed Anchor")
-
-    selected_refs = select_context_refs(event_list, anchor, recent_event_limit=recent_event_limit)
+    anchor = materialized_context.anchor
     materialization_id = _stable_id(
         "materialization",
         {
             "anchor_id": anchor.anchor_id,
             "intent": intent,
-            "selected_refs": selected_refs,
+            "selected_refs": list(materialized_context.selected_refs),
             "failure": error,
         },
     )
-    materialized_input = build_initial_input(
-        anchor=anchor,
-        intent=intent,
-        selected_refs=selected_refs,
-        workspace_metadata=workspace_metadata or {},
-    )
 
-    materialized = make_tape_event(
-        "bub.context.materialized",
-        payload={
-            "materialization_id": materialization_id,
-            "anchor_id": anchor.anchor_id,
-            "strategy": "anchor_state_plus_selected_tape_refs",
-            "selected_fact_refs": selected_refs,
-            "input_sha256": _sha256_text(materialized_input),
-            "intent_sha256": _sha256_text(intent),
-            "token_estimate": _rough_token_estimate(materialized_input),
-            "workspace_metadata": workspace_metadata or {},
-        },
-        occurred_at=occurred_at,
+    materialized = _context_materialized_event(
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=anchor.anchor_id,
+        materialization_id=materialization_id,
+        materialized_context=materialized_context,
+        intent=intent,
+        occurred_at=occurred_at,
     )
     failed = make_tape_event(
         "codex.thread.bind.failed",
@@ -155,42 +231,10 @@ def materialize_thread_binding_failed_events(
         tape_id=tape_id,
         anchor_id=anchor.anchor_id,
     )
-    return [materialized, failed]
-
-
-def compact_continuity_binding_event(
-    *,
-    session_id: str,
-    tape_id: str,
-    anchor_id: str,
-    thread_id: str | None,
-    previous_thread_id: str | None,
-    anchor_creation_id: str,
-    source_fact_id: str,
-    snapshot_fact_id: str | None,
-    turn_id: str | None = None,
-    occurred_at: str | None = None,
-) -> TapeEvent:
-    return make_tape_event(
-        "codex.thread.bound",
-        payload={
-            "anchor_id": anchor_id,
-            "thread_id": thread_id,
-            "previous_thread_id": previous_thread_id,
-            "reason": "compact_continuity",
-            "archived_previous": False,
-            "refs": {
-                "source_anchor_creation_id": anchor_creation_id,
-                "source_fact_id": source_fact_id,
-                "snapshot_fact_id": snapshot_fact_id,
-            },
-        },
-        occurred_at=occurred_at,
-        session_id=session_id,
-        tape_id=tape_id,
-        anchor_id=anchor_id,
-        thread_id=thread_id,
-        turn_id=turn_id,
+    return ThreadBindFailureEvents(
+        materialization_id=materialization_id,
+        materialized=materialized,
+        failed=failed,
     )
 
 
@@ -229,7 +273,7 @@ def select_context_refs(
 ) -> list[str]:
     event_list = list(events)
     refs = [anchor.event_id]
-    anchor_refs = _dict_or_empty(anchor.payload.get("refs"))
+    anchor_refs = dict_or_empty(anchor.payload.get("refs"))
     source_event_refs = anchor_refs.get("source_event_refs")
     if isinstance(source_event_refs, list):
         refs.extend(ref for ref in source_event_refs if isinstance(ref, str))
@@ -245,42 +289,90 @@ def select_context_refs(
     return _dedupe(refs)
 
 
+def prepare_materialized_context(
+    tape_events: Iterable[TapeEvent],
+    *,
+    intent: str,
+    workspace_metadata: JsonObject,
+    anchor_id: str | None = None,
+    recent_event_limit: int = 8,
+) -> MaterializedContextInput:
+    event_list = list(tape_events)
+    anchor = find_anchor_created(event_list, anchor_id) if anchor_id else latest_anchor_created(event_list)
+    if anchor is None:
+        raise ValueError("cannot materialize Codex thread without a committed Anchor")
+
+    selected_refs = select_context_refs(event_list, anchor, recent_event_limit=recent_event_limit)
+    return MaterializedContextInput(
+        anchor=anchor,
+        selected_refs=tuple(selected_refs),
+        workspace_metadata=dict(workspace_metadata),
+        text=build_initial_input(
+            anchor=anchor,
+            workspace_metadata=workspace_metadata,
+        ),
+    )
+
+
 def build_initial_input(
     *,
     anchor: TapeEvent,
-    intent: str,
-    selected_refs: list[str],
     workspace_metadata: JsonObject,
 ) -> str:
-    state = _dict_or_empty(anchor.payload.get("state"))
-    refs = _dict_or_empty(anchor.payload.get("refs"))
-    material = {
-        "anchor": {
-            "anchor_id": anchor.anchor_id,
-            "method": anchor.payload.get("method"),
-            "reason": anchor.payload.get("reason"),
-            "state": state,
-            "refs": refs,
-        },
-        "selected_fact_refs": selected_refs,
+    state = dict_or_empty(anchor.payload.get("state"))
+    material: JsonObject = {
         "workspace_metadata": workspace_metadata,
-        "current_intent_ref": {
-            "sha256": _sha256_text(intent),
-        },
     }
+    summary = state.get("summary")
+    if isinstance(summary, str) and summary:
+        material["handoff_summary"] = summary
     return json.dumps(material, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _context_materialized_event(
+    *,
+    session_id: str,
+    tape_id: str,
+    anchor_id: str,
+    materialization_id: str,
+    materialized_context: MaterializedContextInput,
+    intent: str,
+    occurred_at: str | None,
+    materialization_turn_id: str | None = None,
+) -> TapeEvent:
+    payload: JsonObject = {
+        "materialization_id": materialization_id,
+        "anchor_id": anchor_id,
+        "strategy": "workspace_metadata_plus_optional_handoff_summary",
+        "selected_fact_refs": list(materialized_context.selected_refs),
+        "input_sha256": sha256_text(materialized_context.text),
+        "intent_sha256": sha256_text(intent),
+        "token_estimate": _rough_token_estimate(materialized_context.text),
+        "workspace_metadata": materialized_context.workspace_metadata,
+    }
+    if materialization_turn_id is not None:
+        payload["refs"] = {"materialization_turn_id": materialization_turn_id}
+    return make_tape_event(
+        "bub.context.materialized",
+        payload=payload,
+        occurred_at=occurred_at,
+        session_id=session_id,
+        tape_id=tape_id,
+        anchor_id=anchor_id,
+    )
 
 
 def _rough_token_estimate(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _stable_id(prefix: str, value: Any) -> str:
-    return f"{prefix}_{_sha256_text(json.dumps(value, ensure_ascii=False, sort_keys=True))[:24]}"
+def _stable_id(prefix: str, value: object) -> str:
+    return f"{prefix}_{sha256_text(canonical_json(value))[:24]}"
 
 
-def _sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _anchor_stable_id(prefix: str, value: object) -> str:
+    digest = sha256_text(f"{prefix}:{canonical_json(value)}")[:24]
+    return f"{prefix}_{digest}"
 
 
 def _dedupe(values: Iterable[str]) -> list[str]:
@@ -292,8 +384,3 @@ def _dedupe(values: Iterable[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
-
-
-def _dict_or_empty(value: Any) -> JsonObject:
-    return value if isinstance(value, dict) else {}
-

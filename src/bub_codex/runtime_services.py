@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -14,10 +13,9 @@ from .codex_thread_service import MaterializingCodexThreadService
 from .config import BubCodexSettings, load_settings
 from .bub_tools import BubToolRuntimeContext, build_bub_dynamic_tool_provider
 from .republic_tape_store import RepublicTapeStoreAdapter
-from .runtime import BubCodexRuntime, RuntimeTurnResult
-from .stream_utils import default_tape_id, prompt_text, stream_text, to_stream_event
-from .tape_store import InMemoryTapeStore
-from .turn_translator import stream_success_decisions_from_tape_events
+from .runtime import BubCodexRuntime
+from .stream_utils import stream_text
+from .tape_store import InMemoryTapeStore, TapeStore
 
 
 class RuntimeStreamService(Protocol):
@@ -28,6 +26,9 @@ class RuntimeStreamService(Protocol):
         session_id: str,
         state: State,
     ) -> AsyncStreamEvents:
+        ...
+
+    def current_tape_store(self) -> TapeStore | None:
         ...
 
 
@@ -61,6 +62,9 @@ class UnconfiguredRuntimeStreamService:
             error={"kind": "unknown", "message": self.message},
         )
 
+    def current_tape_store(self) -> TapeStore | None:
+        return None
+
 
 class LazyRuntimeStreamService:
     """Build the real runtime service inside Bub's turn lifecycle."""
@@ -79,17 +83,11 @@ class LazyRuntimeStreamService:
         state: State,
     ) -> AsyncStreamEvents:
         cache_key = runtime_cache_key(self.framework, self.settings)
-        should_close_after_run = False
         try:
-            runtime = self._cached_runtime if cache_key is not None and cache_key == self._cached_key else None
+            runtime = self._cached_runtime_for(cache_key)
+            should_close_after_run = cache_key is None
             if runtime is None:
-                self.close()
-                runtime = build_runtime_stream_service(self.framework, settings=self.settings)
-                if cache_key is not None:
-                    self._cached_runtime = runtime
-                    self._cached_key = cache_key
-                else:
-                    should_close_after_run = True
+                runtime = self._build_runtime(cache_key)
         except Exception as exc:
             return stream_text(
                 f"bub-codex runtime is not configured: {exc}",
@@ -120,42 +118,27 @@ class LazyRuntimeStreamService:
         self._cached_key = None
         close_runtime(runtime)
 
+    def current_tape_store(self) -> TapeStore | None:
+        cache_key = runtime_cache_key(self.framework, self.settings)
+        if cache_key is None:
+            return None
+        runtime = self._cached_runtime_for(cache_key)
+        if runtime is None:
+            runtime = self._build_runtime(cache_key)
+        return runtime.current_tape_store() if runtime is not None else None
 
-class BubCodexRuntimeStreamService:
-    def __init__(
-        self,
-        runtime: BubCodexRuntime,
-        *,
-        tape_id_factory: Any | None = None,
-    ) -> None:
-        self.runtime = runtime
-        self._tape_id_factory = tape_id_factory or default_tape_id
+    def _cached_runtime_for(self, cache_key: RuntimeCacheKey | None) -> RuntimeStreamService | None:
+        if cache_key is not None and cache_key == self._cached_key:
+            return self._cached_runtime
+        return None
 
-    async def run_stream(
-        self,
-        *,
-        prompt: str | list[dict],
-        session_id: str,
-        state: State,
-    ) -> AsyncStreamEvents:
-        prompt = prompt_text(prompt)
-        cwd = str(state.get("_runtime_workspace") or ".")
-        tape_id = str(self._tape_id_factory(session_id, state))
-        try:
-            result = self.runtime.run_turn(
-                session_id=session_id,
-                tape_id=tape_id,
-                cwd=cwd,
-                prompt=prompt,
-                workspace_metadata={"cwd": cwd},
-            )
-        except Exception as exc:
-            return stream_text(
-                f"{type(exc).__name__}: {exc}",
-                ok=False,
-                error={"kind": "unknown", "message": str(exc)},
-            )
-        return stream_runtime_turn_result(result)
+    def _build_runtime(self, cache_key: RuntimeCacheKey | None) -> RuntimeStreamService:
+        self.close()
+        runtime = build_runtime_stream_service(self.framework, settings=self.settings)
+        if cache_key is not None:
+            self._cached_runtime = runtime
+            self._cached_key = cache_key
+        return runtime
 
 
 def build_runtime_stream_service(
@@ -168,7 +151,7 @@ def build_runtime_stream_service(
     from .live_stream import BubCodexLiveRuntimeStreamService
 
     settings = settings or load_settings()
-    workspace = settings.workspace or getattr(framework, "workspace", None)
+    workspace = runtime_workspace(framework, settings)
     if workspace is None:
         raise RuntimeError("workspace is not available")
 
@@ -199,8 +182,7 @@ def build_runtime_stream_service(
         _model_visible_bub_tape_tools(),
         context_factory=tool_runtime_context.context_for_call,
     )
-    client = _build_codex_client(
-        codex_client_factory,
+    client = codex_client_factory(
         config=client_config,
         approval_handler=dynamic_tool_provider.dispatcher.handle_server_request,
     )
@@ -223,16 +205,6 @@ def build_runtime_stream_service(
     )
 
 
-def stream_runtime_turn_result(result: RuntimeTurnResult) -> AsyncStreamEvents:
-    decisions = stream_success_decisions_from_tape_events(result.appended_events)
-
-    async def iterator():
-        for decision in decisions:
-            yield to_stream_event(decision)
-
-    return AsyncStreamEvents(iterator(), state=StreamState())
-
-
 def stream_state(stream: AsyncStreamEvents) -> StreamState | None:
     return getattr(stream, "_state", None)
 
@@ -243,9 +215,9 @@ def close_runtime(runtime: RuntimeStreamService | None) -> None:
         close()
 
 
-def runtime_tape_store(framework: Any, settings: BubCodexSettings):
-    if settings.use_bub_tape_store and hasattr(framework, "get_tape_store"):
-        tape_store = framework.get_tape_store()
+def runtime_tape_store(framework: Any, settings: BubCodexSettings) -> TapeStore:
+    if settings.use_bub_tape_store:
+        tape_store = active_bub_tape_store(framework)
         if tape_store is not None:
             if is_async_tape_store(tape_store):
                 raise RuntimeError(
@@ -258,14 +230,14 @@ def runtime_tape_store(framework: Any, settings: BubCodexSettings):
 
 def runtime_cache_key(framework: Any, settings: BubCodexSettings) -> RuntimeCacheKey | None:
     active_store = None
-    if settings.use_bub_tape_store and hasattr(framework, "get_tape_store"):
-        active_store = framework.get_tape_store()
+    if settings.use_bub_tape_store:
+        active_store = active_bub_tape_store(framework)
         if active_store is None:
             return None
-    workspace = settings.workspace or getattr(framework, "workspace", None)
+    workspace = runtime_workspace(framework, settings)
     return RuntimeCacheKey(
         tape_store_id=id(active_store) if active_store is not None else None,
-        workspace=str(workspace) if workspace is not None else None,
+        workspace=workspace,
         codex_bin=str(settings.codex_bin) if settings.codex_bin else None,
         sdk_python_path=str(settings.sdk_python_path) if settings.sdk_python_path else None,
         approval_policy=settings.approval_policy,
@@ -276,16 +248,16 @@ def runtime_cache_key(framework: Any, settings: BubCodexSettings) -> RuntimeCach
     )
 
 
-def _build_codex_client(
-    factory: Callable[..., Any],
-    *,
-    config: Any,
-    approval_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]],
-) -> Any:
-    signature = inspect.signature(factory)
-    if "approval_handler" in signature.parameters:
-        return factory(config=config, approval_handler=approval_handler)
-    return factory(config=config)
+def runtime_workspace(framework: Any, settings: BubCodexSettings) -> str | None:
+    workspace = settings.workspace or getattr(framework, "workspace", None)
+    return str(workspace) if workspace is not None else None
+
+
+def active_bub_tape_store(framework: Any) -> Any | None:
+    get_tape_store = getattr(framework, "get_tape_store", None)
+    if not callable(get_tape_store):
+        return None
+    return get_tape_store()
 
 
 def _model_visible_bub_tape_tools() -> list[Any]:

@@ -92,8 +92,9 @@ still handled by Bub.
 - user command: `,tape.handoff name=handoff summary="new context"`
 - Codex dynamic tool: `bub.tape_handoff`
 
-Both paths create a Bub Anchor. The next normal chat turn materializes a new
-Codex thread from that Anchor and binds it in tape.
+Both paths create a Bub Anchor when Bub has an active tape store. The next
+normal chat turn materializes a new Codex thread from that Anchor and binds it
+in tape.
 
 ## Behavior
 
@@ -109,7 +110,9 @@ At runtime, the plugin:
 - writes selected Codex runtime events to Bub tape
 - emits final-answer text to Bub's stream output
 
-See [docs/design.md](docs/design.md) for the runtime flow.
+See [docs/design.md](docs/design.md) for the runtime flow and
+[docs/integration-contracts.md](docs/integration-contracts.md) for the Bub,
+Republic, and Codex SDK contracts this package depends on.
 
 ## Verification
 

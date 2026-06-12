@@ -4,10 +4,9 @@ import asyncio
 import inspect
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .codex_client import (
@@ -17,9 +16,9 @@ from .codex_client import (
     DynamicToolSpec,
     dynamic_tool_key,
 )
+from .json_utils import JsonObject
 
 
-JsonObject = dict[str, Any]
 BUB_DYNAMIC_TOOL_NAMESPACE = "bub"
 _CODEX_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 _UNSAFE_CODEX_TOOL_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_-]+")
@@ -29,7 +28,6 @@ class BubToolLike(Protocol):
     name: str
     description: str | None
     parameters: JsonObject
-    handler: Callable[..., Any] | None
     context: bool
 
 
@@ -46,29 +44,8 @@ class ToolContextLike:
 class BubDynamicToolProvider:
     specs: tuple[DynamicToolSpec, ...]
     dispatcher: DynamicToolDispatcher
-    codex_to_bub_name: dict[str, str]
 
 
-@dataclass(frozen=True, slots=True)
-class BubToolInvocationAuditRecord:
-    """Host-side audit record for Bub dynamic tool handler execution."""
-
-    event_type: str
-    call_id: str
-    namespace: str | None
-    codex_tool_name: str
-    bub_tool_name: str
-    thread_id: str | None
-    turn_id: str | None
-    arguments: JsonObject
-    occurred_at: str
-    success: bool | None = None
-    output: JsonObject | None = None
-    error_type: str | None = None
-    error_message: str | None = None
-
-
-BubToolInvocationObserver = Callable[[BubToolInvocationAuditRecord], None]
 _ASYNC_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bub-codex-tool")
 
 
@@ -141,11 +118,9 @@ def build_bub_dynamic_tool_provider(
     *,
     namespace: str = BUB_DYNAMIC_TOOL_NAMESPACE,
     context_factory: Callable[[DynamicToolCall], Any] | None = None,
-    invocation_observer: BubToolInvocationObserver | None = None,
 ) -> BubDynamicToolProvider:
     specs: list[DynamicToolSpec] = []
     handlers: dict[tuple[str | None, str], Callable[[DynamicToolCall], DynamicToolResult]] = {}
-    codex_to_bub_name: dict[str, str] = {}
     seen: dict[str, str] = {}
 
     for tool in tools:
@@ -156,9 +131,8 @@ def build_bub_dynamic_tool_provider(
         if existing := seen.get(codex_name):
             raise ValueError(
                 f"Codex dynamic tool name collision: {existing!r} and {tool.name!r} both map to {codex_name!r}"
-            )
+        )
         seen[codex_name] = tool.name
-        codex_to_bub_name[codex_name] = tool.name
 
         spec = DynamicToolSpec(
             namespace=namespace,
@@ -170,18 +144,16 @@ def build_bub_dynamic_tool_provider(
         handlers[dynamic_tool_key(spec)] = _make_bub_tool_handler(
             tool,
             context_factory=context_factory,
-            invocation_observer=invocation_observer,
         )
 
     return BubDynamicToolProvider(
         specs=tuple(specs),
         dispatcher=DynamicToolDispatcher(handlers),
-        codex_to_bub_name=codex_to_bub_name,
     )
 
 
 def _is_executable_tool(tool: BubToolLike) -> bool:
-    return tool.handler is not None or callable(getattr(tool, "run", None))
+    return callable(getattr(tool, "handler", None)) or callable(getattr(tool, "run", None))
 
 
 def bub_tool_name_to_codex_name(name: str) -> str:
@@ -197,15 +169,8 @@ def _make_bub_tool_handler(
     tool: BubToolLike,
     *,
     context_factory: Callable[[DynamicToolCall], Any] | None,
-    invocation_observer: BubToolInvocationObserver | None,
 ) -> Callable[[DynamicToolCall], DynamicToolResult]:
     def handle(call: DynamicToolCall) -> DynamicToolResult:
-        _observe_invocation(
-            invocation_observer,
-            "bub.tool.invocation.started",
-            call=call,
-            bub_tool_name=tool.name,
-        )
         try:
             kwargs = dict(call.arguments)
             if tool.context:
@@ -215,29 +180,9 @@ def _make_bub_tool_handler(
 
             result = _run_bub_tool(tool, kwargs)
             result = _resolve_awaitable(result)
-            dynamic_result = _tool_result_to_dynamic_result(result)
-            _observe_invocation(
-                invocation_observer,
-                "bub.tool.invocation.completed",
-                call=call,
-                bub_tool_name=tool.name,
-                success=dynamic_result.success,
-                output=dynamic_result.to_app_server_json(),
-            )
-            return dynamic_result
+            return _tool_result_to_dynamic_result(result)
         except Exception as exc:
-            dynamic_result = DynamicToolResult.input_text(f"{type(exc).__name__}: {exc}", success=False)
-            _observe_invocation(
-                invocation_observer,
-                "bub.tool.invocation.failed",
-                call=call,
-                bub_tool_name=tool.name,
-                success=False,
-                output=dynamic_result.to_app_server_json(),
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-            return dynamic_result
+            return DynamicToolResult.input_text(f"{type(exc).__name__}: {exc}", success=False)
 
     return handle
 
@@ -247,40 +192,10 @@ def _run_bub_tool(tool: BubToolLike, kwargs: JsonObject) -> Any:
     if callable(run):
         return run(**kwargs)
 
-    assert tool.handler is not None
-    return tool.handler(**kwargs)
-
-
-def _observe_invocation(
-    observer: BubToolInvocationObserver | None,
-    event_type: str,
-    *,
-    call: DynamicToolCall,
-    bub_tool_name: str,
-    success: bool | None = None,
-    output: JsonObject | None = None,
-    error_type: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    if observer is None:
-        return
-    observer(
-        BubToolInvocationAuditRecord(
-            event_type=event_type,
-            call_id=call.call_id,
-            namespace=call.namespace,
-            codex_tool_name=call.tool,
-            bub_tool_name=bub_tool_name,
-            thread_id=call.thread_id,
-            turn_id=call.turn_id,
-            arguments=dict(call.arguments),
-            occurred_at=datetime.now(timezone.utc).isoformat(),
-            success=success,
-            output=output,
-            error_type=error_type,
-            error_message=error_message,
-        )
-    )
+    handler = getattr(tool, "handler", None)
+    if not callable(handler):
+        raise RuntimeError(f"Bub tool is not executable: {tool.name}")
+    return handler(**kwargs)
 
 
 def _resolve_awaitable(value: Any) -> Any:

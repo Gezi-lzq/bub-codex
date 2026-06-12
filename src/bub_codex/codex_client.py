@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Callable
 
-
-JsonObject = dict[str, Any]
-DynamicToolHandler = Callable[[JsonObject], JsonObject]
-ServerRequestObserver = Callable[[str, JsonObject | None], None]
+from .json_utils import JsonObject, dict_or_empty, optional_str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,26 +40,26 @@ class DynamicToolCall:
     def from_app_server_params(cls, params: JsonObject) -> "DynamicToolCall":
         return cls(
             call_id=str(params.get("callId") or ""),
-            namespace=_optional_str(params.get("namespace")),
+            namespace=optional_str(params.get("namespace")),
             tool=str(params.get("tool") or ""),
-            arguments=_dict_or_empty(params.get("arguments")),
-            thread_id=_optional_str(params.get("threadId")),
-            turn_id=_optional_str(params.get("turnId")),
+            arguments=dict_or_empty(params.get("arguments")),
+            thread_id=optional_str(params.get("threadId")),
+            turn_id=optional_str(params.get("turnId")),
         )
 
 
 @dataclass(frozen=True, slots=True)
 class DynamicToolResult:
-    content_items: list[JsonObject]
+    content_items: tuple[JsonObject, ...]
     success: bool
 
     @classmethod
     def input_text(cls, text: str, *, success: bool = True) -> "DynamicToolResult":
-        return cls(content_items=[{"type": "inputText", "text": text}], success=success)
+        return cls(content_items=({"type": "inputText", "text": text},), success=success)
 
     def to_app_server_json(self) -> JsonObject:
         return {
-            "contentItems": self.content_items,
+            "contentItems": list(self.content_items),
             "success": self.success,
         }
 
@@ -89,16 +86,10 @@ class DynamicToolDispatcher:
     def __init__(
         self,
         handlers: dict[tuple[str | None, str], Callable[[DynamicToolCall], DynamicToolResult]],
-        *,
-        observer: ServerRequestObserver | None = None,
     ) -> None:
         self._handlers = handlers
-        self._observer = observer
 
     def handle_server_request(self, method: str, params: JsonObject | None) -> JsonObject:
-        if self._observer:
-            self._observer(method, params)
-
         if method == "item/tool/call":
             call = DynamicToolCall.from_app_server_params(params or {})
             handler = self._handlers.get((call.namespace, call.tool))
@@ -119,15 +110,3 @@ class DynamicToolDispatcher:
 
 def dynamic_tool_key(spec: DynamicToolSpec) -> tuple[str | None, str]:
     return (spec.namespace, spec.name)
-
-
-def dataclass_json(value: Any) -> JsonObject:
-    return asdict(value)
-
-
-def _dict_or_empty(value: Any) -> JsonObject:
-    return value if isinstance(value, dict) else {}
-
-
-def _optional_str(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None

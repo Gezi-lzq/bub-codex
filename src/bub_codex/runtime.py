@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .codex_thread_service import CodexTurn
-from .runtime_adapter import facts_from_notification_record
+from .runtime_adapter import facts_from_notification_records
 from .runtime_context import (
     CodexThreadContextAdapter,
     ContextUnavailable,
@@ -13,7 +13,9 @@ from .runtime_context import (
     RuntimeContextKernel,
     RuntimeStartResult,
 )
-from .tape_events import JsonObject, TapeEvent
+from .json_utils import JsonObject
+from .startup_context import prompt_with_startup_context
+from .tape_events import TapeEvent
 from .tape_store import TapeStore
 from .turn_projection import project_user_turn_events
 
@@ -31,14 +33,6 @@ class RuntimeTurnResult:
     thread_id: str
     turn_id: str
     appended_events: tuple[TapeEvent, ...]
-
-    def to_json(self) -> JsonObject:
-        return {
-            "start": self.start.to_json(),
-            "thread_id": self.thread_id,
-            "turn_id": self.turn_id,
-            "appended_events": [event.to_json() for event in self.appended_events],
-        }
 
 
 @dataclass(slots=True)
@@ -73,9 +67,13 @@ class BubCodexRuntime:
         turn = self.codex_threads.run_turn(
             thread_id=start.thread_id,
             cwd=cwd,
-            prompt=prompt,
+            prompt=prompt_with_startup_context(prompt=prompt, startup_context=start.startup_context),
         )
-        facts = _facts_from_turn_notifications(turn)
+        facts = facts_from_notification_records(
+            turn.notification_records,
+            source="sdk_stream:user_turn",
+            turn_id=turn.turn_id,
+        )
         turn_events = project_user_turn_events(
             facts,
             session_id=session_id,
@@ -89,22 +87,6 @@ class BubCodexRuntime:
             turn_id=turn.turn_id,
             appended_events=tuple(turn_events),
         )
-
-
-def _facts_from_turn_notifications(turn: CodexTurn):
-    facts = []
-    for record in turn.notification_records:
-        facts.extend(
-            facts_from_notification_record(
-                {
-                    **record,
-                    "turn_id": turn.turn_id,
-                },
-                source="sdk_stream:user_turn",
-            )
-        )
-    return facts
-
 
 __all__ = [
     "BubCodexRuntime",

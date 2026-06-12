@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .tape_events import JsonObject, TapeEvent, make_tape_event
+from .json_utils import JsonObject
+from .tape_events import TapeEvent, make_tape_event
 
 
 def runtime_error_event(
@@ -16,10 +17,11 @@ def runtime_error_event(
     turn_id: str | None = None,
     details: JsonObject | None = None,
 ) -> TapeEvent:
+    summary = runtime_error_summary(exc)
     payload: JsonObject = {
         "stage": stage,
-        "error_type": type(exc).__name__,
-        "message": str(exc),
+        "error_type": summary["type"],
+        "message": summary["message"],
     }
     if details:
         payload["details"] = _json_safe(details)
@@ -33,6 +35,10 @@ def runtime_error_event(
         thread_id=thread_id,
         turn_id=turn_id,
     )
+
+
+def runtime_error_summary(exc: Exception) -> JsonObject:
+    return {"type": type(exc).__name__, "message": str(exc)}
 
 
 def _json_safe(value: Any) -> Any:

@@ -3,6 +3,9 @@
 `bub-codex` is a Bub plugin that uses Codex as the model runtime while keeping
 Bub in charge of the conversation pipeline.
 
+The exact Bub, Republic, and Codex SDK surfaces this package relies on are
+listed in [integration-contracts.md](integration-contracts.md).
+
 ## Pipeline Position
 
 `bub-codex` does not replace Bub's turn pipeline. It only handles the model
@@ -103,6 +106,7 @@ Anchor/thread resolution.
 - `bub.tape_handoff`
 
 `tape.handoff` is the context-switching tool. When the user runs
-`,tape.handoff` or Codex calls `bub.tape_handoff`, Bub records a new Anchor. On
-the next normal chat turn, `bub-codex` resolves that latest Anchor, creates a new
-Codex thread, and writes the new `codex.thread.bound` event to tape.
+`,tape.handoff` or Codex calls `bub.tape_handoff` and Bub has an active tape
+store, Bub records a new Anchor. On the next normal chat turn, `bub-codex`
+resolves that latest Anchor, creates a new Codex thread, and writes the new
+`codex.thread.bound` event to tape.

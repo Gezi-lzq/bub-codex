@@ -3,12 +3,9 @@ from __future__ import annotations
 from typing import Iterable
 
 from .runtime_adapter import CodexFact
-from .compact_projection import project_codex_facts_to_tape_events
-from .tape_events import (
-    JsonObject,
-    TapeEvent,
-    make_tape_event,
-)
+from .compact_projection import project_compaction_events
+from .json_utils import JsonObject
+from .tape_events import TapeEvent, make_tape_event
 from .tool_projection import project_tool_event
 
 
@@ -19,9 +16,8 @@ def project_user_turn_events(
     tape_id: str,
     anchor_id: str | None,
 ) -> list[TapeEvent]:
-    facts_list = list(facts)
     events: list[TapeEvent] = []
-    for fact in facts_list:
+    for fact in facts:
         if fact.kind == "codex.turn.started":
             events.append(_project_turn_fact(fact, "codex.turn.started", session_id, tape_id, anchor_id))
         elif tool_event := project_tool_event(
@@ -35,7 +31,7 @@ def project_user_turn_events(
             events.append(_project_assistant_message_fact(fact, session_id, tape_id, anchor_id))
         elif fact.kind == "codex.thread.compacted":
             events.extend(
-                project_codex_facts_to_tape_events(
+                project_compaction_events(
                     [fact],
                     session_id=session_id,
                     tape_id=tape_id,
@@ -79,13 +75,12 @@ def _project_turn_fact(
     tape_id: str,
     anchor_id: str | None,
 ) -> TapeEvent:
-    payload: JsonObject = {
-        "purpose": "user_turn",
-        "source_fact_id": fact.event_id,
-    }
     return make_tape_event(
         event_type,
-        payload=payload,
+        payload={
+            "purpose": "user_turn",
+            "source_fact_id": fact.event_id,
+        },
         occurred_at=fact.occurred_at,
         session_id=session_id,
         tape_id=tape_id,

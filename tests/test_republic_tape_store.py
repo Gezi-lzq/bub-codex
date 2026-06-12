@@ -13,6 +13,7 @@ if str(SRC) not in sys.path:
 from republic import TapeEntry  # noqa: E402
 from bub.builtin.store import FileTapeStore  # noqa: E402
 from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
+from bub_codex.runtime_context import resolve_runtime_context  # noqa: E402
 from bub_codex.tape_events import make_tape_event  # noqa: E402
 
 
@@ -42,7 +43,7 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
             reloaded = RepublicTapeStoreAdapter(FileTapeStore(store_dir))
 
             events = reloaded.events(session_id="session", tape_id=tape_id)
-            resolution = reloaded.resolve_runtime_context(session_id="session", tape_id=tape_id)
+            resolution = resolve_runtime_context(events)
 
         self.assertEqual([event.type for event in events], ["bub.anchor.created", "codex.thread.bound"])
         self.assertEqual(resolution.action, "resume_thread")
@@ -78,7 +79,7 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
 
             reloaded = RepublicTapeStoreAdapter(FileTapeStore(store_dir))
             events = reloaded.events(session_id="session", tape_id=tape_id)
-            resolution = reloaded.resolve_runtime_context(session_id="session", tape_id=tape_id)
+            resolution = resolve_runtime_context(events)
 
         self.assertEqual([event.type for event in events], ["bub.anchor.created", "codex.thread.bound", "bub.anchor.created"])
         self.assertEqual(events[-1].payload["method"], "bub_handoff")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -9,7 +8,7 @@ from typing import Any
 from republic import TapeEntry, TapeQuery
 from republic.tape.store import is_async_tape_store
 
-from .runtime_resolution import RuntimeContextResolution, resolve_runtime_context
+from .json_utils import dict_or_empty, optional_str, sha256_text
 from .tape_events import TapeEvent
 
 
@@ -38,14 +37,6 @@ class RepublicTapeStoreAdapter:
             for event in self._read_tape_events(tape_id)
             if session_id is None or event.session_id in (session_id, None)
         ]
-
-    def resolve_runtime_context(
-        self,
-        *,
-        session_id: str,
-        tape_id: str,
-    ) -> RuntimeContextResolution:
-        return resolve_runtime_context(self.events(session_id=session_id, tape_id=tape_id))
 
     def _append_one(self, event: TapeEvent) -> None:
         entry = TapeEntry.event(
@@ -89,13 +80,13 @@ def _event_from_json(data: dict[str, Any]) -> TapeEvent:
     return TapeEvent(
         type=str(data["type"]),
         event_id=str(data["event_id"]),
-        payload=data.get("payload") if isinstance(data.get("payload"), dict) else {},
-        occurred_at=_optional_str(data.get("occurred_at")),
-        session_id=_optional_str(data.get("session_id")),
-        tape_id=_optional_str(data.get("tape_id")),
-        anchor_id=_optional_str(data.get("anchor_id")),
-        thread_id=_optional_str(data.get("thread_id")),
-        turn_id=_optional_str(data.get("turn_id")),
+        payload=dict_or_empty(data.get("payload")),
+        occurred_at=optional_str(data.get("occurred_at")),
+        session_id=optional_str(data.get("session_id")),
+        tape_id=optional_str(data.get("tape_id")),
+        anchor_id=optional_str(data.get("anchor_id")),
+        thread_id=optional_str(data.get("thread_id")),
+        turn_id=optional_str(data.get("turn_id")),
     )
 
 
@@ -106,7 +97,7 @@ def _native_anchor_event(entry: TapeEntry, *, tape_id: str) -> TapeEvent | None:
     state = entry.payload.get("state")
     if not isinstance(state, dict):
         state = {}
-    occurred_at = _optional_str(getattr(entry, "date", None))
+    occurred_at = optional_str(getattr(entry, "date", None))
     source_entry_id = str(getattr(entry, "id", ""))
     anchor_id = _native_anchor_id(tape_id=tape_id, source_entry_id=source_entry_id, name=name, occurred_at=occurred_at)
     payload = {
@@ -135,7 +126,7 @@ def _native_anchor_event(entry: TapeEntry, *, tape_id: str) -> TapeEvent | None:
 
 def _native_anchor_id(*, tape_id: str, source_entry_id: str, name: str, occurred_at: str | None) -> str:
     body = "|".join((tape_id, source_entry_id, name, occurred_at or ""))
-    return "anchor_" + hashlib.sha256(body.encode("utf-8")).hexdigest()[:24]
+    return "anchor_" + sha256_text(body)[:24]
 
 
 def _run_awaitable(awaitable):
@@ -144,7 +135,3 @@ def _run_awaitable(awaitable):
     except RuntimeError:
         return asyncio.run(awaitable)
     raise RuntimeError("bub-codex RepublicTapeStoreAdapter cannot call async tape store from a running loop yet")
-
-
-def _optional_str(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None

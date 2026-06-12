@@ -1,31 +1,69 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Literal, Protocol, TypeAlias
+from dataclasses import dataclass
+from typing import Literal, Protocol, TypeAlias
 
-from .context_materialization import create_new_thread_anchor_events
 from .codex_thread_service import ThreadMaterialization
-from .materialization_projection import project_thread_materialization_events
-from .runtime_adapter import facts_from_notification_record
-from .runtime_diagnostics import runtime_error_event
-from .runtime_resolution import RuntimeContextResolution
-from .tape_events import JsonObject, TapeEvent
+from .runtime_diagnostics import runtime_error_event, runtime_error_summary
+from .json_utils import JsonObject
+from .tape_events import TapeEvent
 from .tape_store import TapeStore
 from .new_thread_materialization import (
-    build_initial_input,
-    find_anchor_created,
+    active_thread_id_for_anchor,
+    create_new_thread_anchor_events,
+    latest_anchor_created,
     materialize_thread_binding_events,
     materialize_thread_binding_failed_events,
-    select_context_refs,
+    prepare_materialized_context,
 )
 
 
-RuntimeStartStatus = Literal["bootstrapped", "materialized", "resumed", "bind_failed"]
-ContextUnavailableReason = Literal["thread_materialization_failed"]
+RuntimeAction = Literal["create_anchor", "materialize_thread", "resume_thread"]
+RuntimeStartStatus = Literal[
+    "created_anchor_and_materialized",
+    "materialized_existing_anchor",
+    "resumed_existing_thread",
+    "materialization_failed",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeContextResolution:
+    action: RuntimeAction
+    anchor_id: str | None
+    thread_id: str | None
+    reason: str
+
+
+def resolve_runtime_context(events: list[TapeEvent]) -> RuntimeContextResolution:
+    anchor = latest_anchor_created(events)
+    if anchor is None:
+        return RuntimeContextResolution(
+            action="create_anchor",
+            anchor_id=None,
+            thread_id=None,
+            reason="no_committed_anchor",
+        )
+
+    thread_id = active_thread_id_for_anchor(events, anchor.anchor_id)
+    if thread_id is None:
+        return RuntimeContextResolution(
+            action="materialize_thread",
+            anchor_id=anchor.anchor_id,
+            thread_id=None,
+            reason="latest_anchor_has_no_thread_binding",
+        )
+
+    return RuntimeContextResolution(
+        action="resume_thread",
+        anchor_id=anchor.anchor_id,
+        thread_id=thread_id,
+        reason="latest_anchor_has_thread_binding",
+    )
 
 
 class CodexThreadContextAdapter(Protocol):
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> str | ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
         ...
 
     def resume_thread(self, thread_id: str) -> None:
@@ -39,13 +77,8 @@ class RuntimeStartResult:
     anchor_id: str | None
     thread_id: str | None
     appended_events: tuple[TapeEvent, ...]
+    startup_context: str | None = None
     error: JsonObject | None = None
-
-    def to_json(self) -> JsonObject:
-        data = asdict(self)
-        data["resolution"] = self.resolution.to_json()
-        data["appended_events"] = [event.to_json() for event in self.appended_events]
-        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +88,6 @@ class ExecutableContext:
     anchor_id: str
     thread_id: str
     cwd: str
-    source: Literal["bootstrapped", "materialized", "resumed"]
     appended_events: tuple[TapeEvent, ...]
     start: RuntimeStartResult
 
@@ -66,7 +98,6 @@ class ContextUnavailable:
     tape_id: str
     anchor_id: str | None
     cwd: str
-    reason: ContextUnavailableReason
     error: JsonObject
     appended_events: tuple[TapeEvent, ...]
     start: RuntimeStartResult
@@ -103,7 +134,6 @@ class RuntimeContextKernel:
                 anchor_id=start.anchor_id,
                 thread_id=start.thread_id,
                 cwd=cwd,
-                source=_runtime_context_source(start.status),
                 appended_events=start.appended_events,
                 start=start,
             )
@@ -113,7 +143,6 @@ class RuntimeContextKernel:
             tape_id=tape_id,
             anchor_id=start.anchor_id,
             cwd=cwd,
-            reason="thread_materialization_failed",
             error=error,
             appended_events=start.appended_events,
             start=start,
@@ -129,12 +158,14 @@ class RuntimeContextKernel:
         workspace_metadata: JsonObject | None = None,
     ) -> RuntimeStartResult:
         events = self.tape_store.events(session_id=session_id, tape_id=tape_id)
-        resolution = self.tape_store.resolve_runtime_context(session_id=session_id, tape_id=tape_id)
+        resolution = resolve_runtime_context(events)
 
         if resolution.action == "resume_thread":
-            assert resolution.thread_id is not None
+            thread_id = resolution.thread_id
+            if thread_id is None:
+                raise RuntimeError("resume_thread resolution must include thread_id")
             try:
-                self.codex_threads.resume_thread(resolution.thread_id)
+                self.codex_threads.resume_thread(thread_id)
             except Exception as exc:
                 diagnostic = runtime_error_event(
                     stage="thread_resume",
@@ -142,20 +173,20 @@ class RuntimeContextKernel:
                     session_id=session_id,
                     tape_id=tape_id,
                     anchor_id=resolution.anchor_id,
-                    thread_id=resolution.thread_id,
+                    thread_id=thread_id,
                 )
                 self.tape_store.append(diagnostic)
                 raise
             return RuntimeStartResult(
-                status="resumed",
+                status="resumed_existing_thread",
                 resolution=resolution,
                 anchor_id=resolution.anchor_id,
-                thread_id=resolution.thread_id,
+                thread_id=thread_id,
                 appended_events=(),
             )
 
-        if resolution.action == "bootstrap":
-            anchor_events = create_new_thread_anchor_events(
+        if resolution.action == "create_anchor":
+            anchor_creation = create_new_thread_anchor_events(
                 events,
                 session_id=session_id,
                 tape_id=tape_id,
@@ -164,6 +195,7 @@ class RuntimeContextKernel:
                 owner="human",
                 initiator="bub_runtime",
             )
+            anchor_events = (anchor_creation.started, anchor_creation.created)
             self.tape_store.append_many(anchor_events)
             return self._materialize_from_latest_anchor(
                 base_events=[*events, *anchor_events],
@@ -174,7 +206,7 @@ class RuntimeContextKernel:
                 intent=intent,
                 workspace_metadata=workspace_metadata,
                 reason="session_start",
-                status="bootstrapped",
+                status="created_anchor_and_materialized",
                 already_appended=tuple(anchor_events),
             )
 
@@ -187,7 +219,7 @@ class RuntimeContextKernel:
             intent=intent,
             workspace_metadata=workspace_metadata,
             reason="anchor_materialization",
-            status="materialized",
+            status="materialized_existing_anchor",
             already_appended=(),
         )
 
@@ -202,43 +234,41 @@ class RuntimeContextKernel:
         intent: str,
         workspace_metadata: JsonObject | None,
         reason: str,
-        status: Literal["bootstrapped", "materialized"],
+        status: Literal["created_anchor_and_materialized", "materialized_existing_anchor"],
         already_appended: tuple[TapeEvent, ...],
     ) -> RuntimeStartResult:
-        anchor_id = _latest_anchor_id(base_events)
-        if anchor_id is None:
+        anchor = latest_anchor_created(base_events)
+        if anchor is None:
             raise RuntimeError("cannot materialize thread without a committed Anchor")
+        anchor_id = anchor.anchor_id
 
         metadata = {"cwd": cwd, **(workspace_metadata or {})}
-        materialization_input = _materialization_input_for_anchor(
+        materialized_context = prepare_materialized_context(
             base_events,
-            anchor_id=anchor_id,
             intent=intent,
             workspace_metadata=metadata,
+            anchor_id=anchor_id,
         )
         try:
-            materialization = _normalize_thread_materialization(
-                self.codex_threads.materialize_thread(
-                    cwd=cwd,
-                    anchor_id=anchor_id,
-                    intent=materialization_input,
-                )
+            materialization = self.codex_threads.materialize_thread(
+                cwd=cwd,
+                anchor_id=anchor_id,
+                materialized_context=materialized_context.text,
             )
         except Exception as exc:
-            error = {"type": type(exc).__name__, "message": str(exc)}
-            failed_events = materialize_thread_binding_failed_events(
-                base_events,
+            error = runtime_error_summary(exc)
+            failed_binding = materialize_thread_binding_failed_events(
                 session_id=session_id,
                 tape_id=tape_id,
                 intent=intent,
-                workspace_metadata=metadata,
-                anchor_id=anchor_id,
+                materialized_context=materialized_context,
                 reason=reason,
                 error=error,
             )
+            failed_events = (failed_binding.materialized, failed_binding.failed)
             self.tape_store.append_many(failed_events)
             return RuntimeStartResult(
-                status="bind_failed",
+                status="materialization_failed",
                 resolution=resolution,
                 anchor_id=anchor_id,
                 thread_id=None,
@@ -246,89 +276,25 @@ class RuntimeContextKernel:
                 error=error,
             )
 
-        binding_events = materialize_thread_binding_events(
+        binding = materialize_thread_binding_events(
             base_events,
             session_id=session_id,
             tape_id=tape_id,
             thread_id=materialization.thread_id,
             intent=intent,
-            workspace_metadata=metadata,
-            anchor_id=anchor_id,
+            materialized_context=materialized_context,
             reason=reason,
             materialization_turn_id=materialization.turn_id,
         )
-        materialized_event = binding_events[0]
-        bound_event = binding_events[1]
-        materialization_facts = _facts_from_materialization_notifications(materialization)
-        materialization_events = project_thread_materialization_events(
-            materialization_facts,
-            session_id=session_id,
-            tape_id=tape_id,
-            anchor_id=anchor_id,
-            materialization_id=str(materialized_event.payload.get("materialization_id")),
-            materialization_turn_id=materialization.turn_id,
-        )
-        appended_events = (*already_appended, materialized_event, *materialization_events, bound_event)
-        self.tape_store.append_many([materialized_event, *materialization_events, bound_event])
+        materialized_event = binding.materialized
+        bound_event = binding.bound
+        appended_events = (*already_appended, materialized_event, bound_event)
+        self.tape_store.append_many((materialized_event, bound_event))
         return RuntimeStartResult(
             status=status,
             resolution=resolution,
             anchor_id=anchor_id,
             thread_id=materialization.thread_id,
             appended_events=appended_events,
+            startup_context=materialized_context.text,
         )
-
-
-def _latest_anchor_id(events: list[TapeEvent]) -> str | None:
-    for event in reversed(events):
-        if event.type == "bub.anchor.created" and event.anchor_id:
-            return event.anchor_id
-    return None
-
-
-def _runtime_context_source(
-    status: RuntimeStartStatus,
-) -> Literal["bootstrapped", "materialized", "resumed"]:
-    if status in ("bootstrapped", "materialized", "resumed"):
-        return status
-    raise RuntimeError(f"runtime context is not executable: {status}")
-
-
-def _materialization_input_for_anchor(
-    events: list[TapeEvent],
-    *,
-    anchor_id: str,
-    intent: str,
-    workspace_metadata: JsonObject,
-) -> str:
-    anchor = find_anchor_created(events, anchor_id)
-    if anchor is None:
-        raise RuntimeError("cannot materialize thread without a committed Anchor")
-    return build_initial_input(
-        anchor=anchor,
-        intent=intent,
-        selected_refs=select_context_refs(events, anchor, recent_event_limit=8),
-        workspace_metadata=workspace_metadata,
-    )
-
-
-def _normalize_thread_materialization(value: str | ThreadMaterialization) -> ThreadMaterialization:
-    if isinstance(value, ThreadMaterialization):
-        return value
-    return ThreadMaterialization(thread_id=value)
-
-
-def _facts_from_materialization_notifications(materialization: ThreadMaterialization):
-    facts = []
-    for record in materialization.notification_records:
-        facts.extend(
-            facts_from_notification_record(
-                {
-                    **record,
-                    "turn_id": materialization.turn_id,
-                },
-                source="sdk_stream:thread_materialization",
-            )
-        )
-    return facts
-

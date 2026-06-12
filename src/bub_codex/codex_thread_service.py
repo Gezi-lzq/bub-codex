@@ -2,129 +2,76 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Iterator
-from typing import Any, Callable
+from typing import Any, Protocol
 
 from .codex_client import DynamicToolSpec, ThreadStartOptions
-from .notification_filter import record_belongs_to_thread
+from .json_utils import JsonObject
+from .runtime_adapter import record_belongs_to_thread
 
 
-NotificationObserver = Callable[[Any], None]
-InitialPromptFactory = Callable[[str, str], str]
+class CodexClientPort(Protocol):
+    def thread_start(self, options: JsonObject) -> Any:
+        ...
+
+    def thread_resume(self, thread_id: str, params: JsonObject) -> Any:
+        ...
+
+    def turn_start(self, thread_id: str, prompt: str, options: JsonObject) -> Any:
+        ...
+
+    def next_turn_notification(self, turn_id: str) -> Any:
+        ...
+
+    def unregister_turn_notifications(self, turn_id: str) -> None:
+        ...
 
 
 @dataclass(frozen=True, slots=True)
 class ThreadMaterialization:
     thread_id: str
     turn_id: str | None = None
-    notification_records: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    notification_records: tuple[JsonObject, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
 class CodexTurn:
     thread_id: str
     turn_id: str
-    notification_records: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    notification_records: tuple[JsonObject, ...] = field(default_factory=tuple)
 
 
 @dataclass(slots=True)
 class CodexTurnSession:
-    client: Any
+    client: CodexClientPort
     turn_id: str
     thread_id: str
 
-    def records(self) -> Iterator[dict[str, Any]]:
-        while True:
-            event = self.client.next_turn_notification(self.turn_id)
-            record = {
-                **_notification_record(event),
-                "turn_id": self.turn_id,
-            }
-            if not record_belongs_to_thread(record, self.thread_id):
-                continue
-            yield record
-            if record["method"] == "turn/completed":
-                break
+    def records(self) -> Iterator[JsonObject]:
+        yield from _iter_turn_records(self.client, turn_id=self.turn_id, thread_id=self.thread_id)
 
     def close(self) -> None:
         self.client.unregister_turn_notifications(self.turn_id)
 
 
-class LowLevelCodexThreadService:
-    """Codex thread lifecycle adapter backed by the low-level Python SDK client.
-
-    `thread_start` allocates a thread id, but real SDK testing shows the thread is
-    not resumable until an initial turn creates a rollout. Treat this adapter as
-    a low-level building block, not the final production binding boundary.
-    """
-
-    def __init__(
-        self,
-        client: Any,
-        *,
-        cwd: str,
-        approval_policy: str = "never",
-        sandbox: str = "danger-full-access",
-        dynamic_tools: tuple[DynamicToolSpec, ...] = (),
-    ) -> None:
-        self._client = client
-        self._cwd = cwd
-        self._approval_policy = approval_policy
-        self._sandbox = sandbox
-        self._dynamic_tools = dynamic_tools
-
-    def create_thread(self, *, cwd: str, anchor_id: str, intent: str) -> str:
-        response = self._client.thread_start(
-            ThreadStartOptions(
-                cwd=cwd,
-                approval_policy=self._approval_policy,
-                sandbox=self._sandbox,
-                dynamic_tools=self._dynamic_tools,
-            ).to_app_server_json()
-        )
-        return str(response.thread.id)
-
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> str:
-        return self.create_thread(cwd=cwd, anchor_id=anchor_id, intent=intent)
-
-    def resume_thread(self, thread_id: str) -> None:
-        self._client.thread_resume(
-            thread_id,
-            {
-                "cwd": self._cwd,
-                "approvalPolicy": self._approval_policy,
-                "sandbox": self._sandbox,
-            },
-        )
-
-    def close(self) -> None:
-        close = getattr(self._client, "close", None)
-        if callable(close):
-            close()
-
-
 class MaterializingCodexThreadService:
-    """Create a Codex thread and complete the initial materialization turn."""
+    """Create and resume Codex threads without adding hidden model turns."""
 
     def __init__(
         self,
-        client: Any,
+        client: CodexClientPort,
         *,
         cwd: str,
         approval_policy: str = "never",
         sandbox: str = "danger-full-access",
         dynamic_tools: tuple[DynamicToolSpec, ...] = (),
-        notification_observer: NotificationObserver | None = None,
-        initial_prompt_factory: InitialPromptFactory | None = None,
     ) -> None:
         self._client = client
         self._cwd = cwd
         self._approval_policy = approval_policy
         self._sandbox = sandbox
         self._dynamic_tools = dynamic_tools
-        self._notification_observer = notification_observer
-        self._initial_prompt_factory = initial_prompt_factory or _default_initial_prompt
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
         started = self._client.thread_start(
             ThreadStartOptions(
                 cwd=cwd,
@@ -134,33 +81,7 @@ class MaterializingCodexThreadService:
             ).to_app_server_json()
         )
         thread_id = str(started.thread.id)
-        turn = self._client.turn_start(
-            thread_id,
-            self._initial_prompt_factory(anchor_id, intent),
-            {"cwd": cwd},
-        )
-        turn_id = turn.turn.id
-        notification_records: list[dict[str, Any]] = []
-        try:
-            while True:
-                event = self._client.next_turn_notification(turn_id)
-                record = _notification_record(event)
-                if not record_belongs_to_thread(record, thread_id):
-                    continue
-                notification_records.append(record)
-                if self._notification_observer:
-                    self._notification_observer(event)
-                if record["method"] == "turn/completed":
-                    break
-        finally:
-            self._client.unregister_turn_notifications(turn_id)
-
-        self._client.thread_read(thread_id, include_turns=True)
-        return ThreadMaterialization(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            notification_records=tuple(notification_records),
-        )
+        return ThreadMaterialization(thread_id=thread_id)
 
     def resume_thread(self, thread_id: str) -> None:
         self._client.thread_resume(
@@ -179,23 +100,12 @@ class MaterializingCodexThreadService:
 
     def run_turn(self, *, thread_id: str, cwd: str, prompt: str) -> CodexTurn:
         turn = self._client.turn_start(thread_id, prompt, {"cwd": cwd})
-        turn_id = turn.turn.id
-        notification_records: list[dict[str, Any]] = []
-        try:
-            while True:
-                event = self._client.next_turn_notification(turn_id)
-                record = _notification_record(event)
-                if not record_belongs_to_thread(record, thread_id):
-                    continue
-                notification_records.append(record)
-                if record["method"] == "turn/completed":
-                    break
-        finally:
-            self._client.unregister_turn_notifications(turn_id)
+        turn_id = str(turn.turn.id)
+        notification_records = _collect_turn_records(self._client, turn_id=turn_id, thread_id=thread_id)
         return CodexTurn(
             thread_id=thread_id,
             turn_id=turn_id,
-            notification_records=tuple(notification_records),
+            notification_records=notification_records,
         )
 
     def start_turn_stream(
@@ -213,24 +123,34 @@ class MaterializingCodexThreadService:
         )
 
 
-def _default_initial_prompt(anchor_id: str, materialized_context: str) -> str:
-    return (
-        "Materialize this Bub Anchor as the starting context for this Codex thread. "
-        "Do not answer or execute the user's task during materialization.\n\n"
-        f"Anchor: {anchor_id}\n"
-        f"Materialized context:\n{materialized_context}\n\n"
-        "Reply only with a concise acknowledgement that the Anchor was materialized."
-    )
+def _collect_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str) -> tuple[JsonObject, ...]:
+    try:
+        return tuple(_iter_turn_records(client, turn_id=turn_id, thread_id=thread_id))
+    finally:
+        client.unregister_turn_notifications(turn_id)
 
 
-def _notification_record(event: Any) -> dict[str, Any]:
-    payload = getattr(event, "payload", None)
-    if hasattr(payload, "model_dump"):
-        payload = payload.model_dump(mode="json", by_alias=True, exclude_none=False)
+def _iter_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str) -> Iterator[JsonObject]:
+    while True:
+        event = client.next_turn_notification(turn_id)
+        record = {
+            **_notification_record(event),
+            "turn_id": turn_id,
+        }
+        if not record_belongs_to_thread(record, thread_id):
+            continue
+        yield record
+        if record["method"] == "turn/completed":
+            break
+
+
+def _notification_record(event: Any) -> JsonObject:
+    raw_payload = getattr(event, "payload", None)
+    payload = raw_payload
+    if hasattr(raw_payload, "model_dump"):
+        payload = raw_payload.model_dump(mode="json", by_alias=True, exclude_none=False)
     return {
         "method": getattr(event, "method", None),
-        "payload_type": type(getattr(event, "payload", None)).__name__
-        if getattr(event, "payload", None) is not None
-        else None,
+        "payload_type": type(raw_payload).__name__ if raw_payload is not None else None,
         "payload": payload,
     }

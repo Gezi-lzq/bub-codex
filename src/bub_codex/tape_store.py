@@ -3,13 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Protocol
 
-from .runtime_resolution import RuntimeContextResolution, resolve_runtime_context
 from .tape_events import TapeEvent
-from .new_thread_materialization import active_thread_id_for_anchor, latest_anchor_created
 
 
 class TapeStore(Protocol):
-    """Minimal append-only tape store boundary for runtime spikes."""
+    """Append-only event store used by the runtime state machine."""
 
     def append(self, event: TapeEvent) -> None:
         ...
@@ -20,18 +18,10 @@ class TapeStore(Protocol):
     def events(self, *, session_id: str | None = None, tape_id: str | None = None) -> list[TapeEvent]:
         ...
 
-    def resolve_runtime_context(
-        self,
-        *,
-        session_id: str,
-        tape_id: str,
-    ) -> RuntimeContextResolution:
-        ...
-
 
 @dataclass(slots=True)
 class InMemoryTapeStore:
-    """Small append-only tape store for validating domain projections."""
+    """In-process TapeStore for tests and explicit non-Bub runtime mode."""
 
     _events: list[TapeEvent] = field(default_factory=list)
 
@@ -48,21 +38,3 @@ class InMemoryTapeStore:
         if tape_id is not None:
             selected = [event for event in selected if event.tape_id == tape_id]
         return list(selected)
-
-    def latest_anchor(self, *, session_id: str, tape_id: str) -> TapeEvent | None:
-        return latest_anchor_created(self.events(session_id=session_id, tape_id=tape_id))
-
-    def active_thread_id(self, *, session_id: str, tape_id: str) -> str | None:
-        events = self.events(session_id=session_id, tape_id=tape_id)
-        anchor = latest_anchor_created(events)
-        if anchor is None:
-            return None
-        return active_thread_id_for_anchor(events, anchor.anchor_id)
-
-    def resolve_runtime_context(
-        self,
-        *,
-        session_id: str,
-        tape_id: str,
-    ) -> RuntimeContextResolution:
-        return resolve_runtime_context(self.events(session_id=session_id, tape_id=tape_id))

@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from republic import AsyncStreamEvents, StreamState
 
 from bub.types import State
 
-from .notification_filter import record_belongs_to_thread
+from .runtime_adapter import record_belongs_to_thread
 from .runtime_context import ContextUnavailable, ExecutableContext, RuntimeContextKernel
 from .runtime_diagnostics import runtime_error_event
+from .startup_context import prompt_with_startup_context
 from .stream_utils import default_tape_id, prompt_text as extract_prompt_text, to_stream_event
-from .tape_events import JsonObject
+from .json_utils import JsonObject
+from .tape_store import TapeStore
 from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
+
+
+class CodexTurnSession(Protocol):
+    def records(self) -> Iterable[JsonObject]:
+        ...
+
+    def close(self) -> None:
+        ...
 
 
 class CodexTurnStreamService(Protocol):
@@ -22,22 +33,38 @@ class CodexTurnStreamService(Protocol):
         thread_id: str,
         cwd: str,
         prompt: str,
-    ) -> Any:
+    ) -> CodexTurnSession:
+        ...
+
+
+class ToolRuntimeContext(Protocol):
+    def update(
+        self,
+        *,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: State,
+    ) -> None:
         ...
 
 
 @dataclass(slots=True)
 class BubCodexLiveRuntimeStreamService:
     context_kernel: RuntimeContextKernel
-    tape_store: Any
+    tape_store: TapeStore
     codex_turn_streams: CodexTurnStreamService
-    tape_id_factory: Any | None = None
-    tool_runtime_context: Any | None = None
+    tape_id_factory: Callable[[str, State], str] | None = None
+    tool_runtime_context: ToolRuntimeContext | None = None
 
     def close(self) -> None:
         close = getattr(self.codex_turn_streams, "close", None)
         if callable(close):
             close()
+
+    def current_tape_store(self) -> TapeStore | None:
+        return self.tape_store
 
     async def run_stream(
         self,
@@ -84,7 +111,6 @@ class BubCodexLiveRuntimeStreamService:
 
         async def fixed_iterator():
             async for stream_event in _iter_live_turn_events(
-                context_kernel=self.context_kernel,
                 tape_store=self.tape_store,
                 stream_service=self.codex_turn_streams,
                 session_id=session_id,
@@ -100,8 +126,7 @@ class BubCodexLiveRuntimeStreamService:
 
 async def _iter_live_turn_events(
     *,
-    context_kernel: RuntimeContextKernel,
-    tape_store: Any,
+    tape_store: TapeStore,
     stream_service: CodexTurnStreamService,
     session_id: str,
     tape_id: str,
@@ -117,7 +142,7 @@ async def _iter_live_turn_events(
     turn_session = stream_service.start_turn_stream(
         thread_id=context.thread_id,
         cwd=cwd,
-        prompt=prompt,
+        prompt=prompt_with_startup_context(prompt=prompt, startup_context=context.start.startup_context),
     )
     try:
         for record in turn_session.records():
@@ -172,7 +197,7 @@ def _stream_context_unavailable(context: ContextUnavailable) -> AsyncStreamEvent
 
 
 def _update_tool_runtime_context(
-    tool_runtime_context: Any | None,
+    tool_runtime_context: ToolRuntimeContext | None,
     *,
     session_id: str,
     tape_id: str,
@@ -180,12 +205,12 @@ def _update_tool_runtime_context(
     anchor_id: str | None,
     state: State,
 ) -> None:
-    update = getattr(tool_runtime_context, "update", None)
-    if callable(update):
-        update(
-            session_id=session_id,
-            tape_id=tape_id,
-            cwd=cwd,
-            anchor_id=anchor_id,
-            state=state,
-        )
+    if tool_runtime_context is None:
+        return
+    tool_runtime_context.update(
+        session_id=session_id,
+        tape_id=tape_id,
+        cwd=cwd,
+        anchor_id=anchor_id,
+        state=state,
+    )

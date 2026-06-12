@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import bub
 from pydantic import Field, field_validator
@@ -47,19 +46,3 @@ class BubCodexSettings(bub.Settings):
 
 def load_settings() -> BubCodexSettings:
     return bub.ensure_config(BubCodexSettings)
-
-
-def settings_fragment(settings: BubCodexSettings) -> dict[str, Any]:
-    return {
-        CONFIG_NAME: {
-            "enabled": settings.enabled,
-            "codex_bin": str(settings.codex_bin) if settings.codex_bin else None,
-            "sdk_python_path": str(settings.sdk_python_path) if settings.sdk_python_path else None,
-            "workspace": str(settings.workspace) if settings.workspace else None,
-            "approval_policy": settings.approval_policy,
-            "sandbox": settings.sandbox,
-            "config_overrides": list(settings.config_overrides),
-            "env": dict(settings.env),
-            "use_bub_tape_store": settings.use_bub_tape_store,
-        }
-    }

@@ -56,6 +56,23 @@ class BubDynamicToolsTest(unittest.TestCase):
         self.assertEqual(result["contentItems"][0]["text"], "anchor added")
         self.assertEqual(calls, [("handoff summary", "tape-1", "anchor-1", "agent")])
 
+    def test_dynamic_tool_provider_accepts_run_only_bub_tools(self) -> None:
+        tool = RunOnlyTool()
+        provider = build_bub_dynamic_tool_provider([tool])
+
+        result = provider.dispatcher.handle_server_request(
+            "item/tool/call",
+            {
+                "callId": "call-1",
+                "namespace": "bub",
+                "tool": "tape_info",
+                "arguments": {"verbose": True},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["contentItems"][0]["text"], "ran with verbose=True")
+
 
 class FakeTool:
     def __init__(self, *, name, description, parameters, handler, context):
@@ -64,6 +81,16 @@ class FakeTool:
         self.parameters = parameters
         self.handler = handler
         self.context = context
+
+
+class RunOnlyTool:
+    name = "tape.info"
+    description = "Show tape info"
+    parameters = {"type": "object", "properties": {"verbose": {"type": "boolean"}}}
+    context = False
+
+    def run(self, *, verbose: bool) -> str:
+        return f"ran with verbose={verbose}"
 
 
 if __name__ == "__main__":

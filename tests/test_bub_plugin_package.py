@@ -96,7 +96,7 @@ class BubPluginPackageTest(unittest.TestCase):
 
     def test_comma_handoff_records_anchor_in_codex_runtime_tape(self) -> None:
         store = InMemoryTapeStore()
-        runtime = SimpleNamespace(tape_store=store)
+        runtime = FakeRuntimeStreamService(tape_store=store)
         plugin = BubCodexPlugin(runtime)
         state = {
             "_runtime_workspace": str(ROOT),
@@ -117,6 +117,41 @@ class BubPluginPackageTest(unittest.TestCase):
         self.assertEqual([event.type for event in events], ["bub.anchor.creation.started", "bub.anchor.created"])
         self.assertEqual(events[-1].payload["reason"], "handoff")
         self.assertEqual(events[-1].payload["state"]["summary"], "new context")
+
+    def test_lazy_runtime_comma_handoff_builds_runtime_before_recording_anchor(self) -> None:
+        class FakeTapeStore:
+            pass
+
+        framework_store = FakeTapeStore()
+        framework = SimpleNamespace(workspace=ROOT, get_tape_store=lambda: framework_store)
+        plugin = create_plugin(framework)
+        store = InMemoryTapeStore()
+        built_services: list[FakeRuntimeStreamService] = []
+        state = {
+            "_runtime_workspace": str(ROOT),
+            "_runtime_agent": FakeAgent("anchor added: handoff"),
+        }
+
+        def fake_build_runtime_stream_service(active_framework, settings=None):
+            runtime = FakeRuntimeStreamService(tape_store=store)
+            built_services.append(runtime)
+            return runtime
+
+        with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
+            stream = asyncio.run(
+                plugin.run_model_stream(
+                    prompt=',tape.handoff summary="first command"',
+                    session_id="s1",
+                    state=state,
+                )
+            )
+            text = asyncio.run(_collect_text(stream))
+
+        events = store.events(session_id="s1", tape_id=default_tape_id("s1", state))
+        self.assertEqual(text, "anchor added: handoff")
+        self.assertEqual(len(built_services), 1)
+        self.assertEqual([event.type for event in events], ["bub.anchor.creation.started", "bub.anchor.created"])
+        self.assertEqual(events[-1].payload["state"]["summary"], "first command")
 
     def test_plugin_binds_bub_tape_store_at_run_time_not_load_time(self) -> None:
         class FakeTapeStore:
@@ -449,8 +484,9 @@ class BubPluginPackageTest(unittest.TestCase):
 
 
 class FakeRuntimeStreamService:
-    def __init__(self, text: str = "package lifecycle ok") -> None:
+    def __init__(self, text: str = "package lifecycle ok", tape_store=None) -> None:
         self.text = text
+        self.tape_store = tape_store
         self.closed = False
 
     async def run_stream(self, *, prompt, session_id, state):
@@ -458,6 +494,9 @@ class FakeRuntimeStreamService:
 
     def close(self) -> None:
         self.closed = True
+
+    def current_tape_store(self):
+        return self.tape_store
 
 
 class FakeAgent:

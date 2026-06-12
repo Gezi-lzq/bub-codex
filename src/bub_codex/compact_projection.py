@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 from typing import Iterable
 
+from .json_utils import sha256_text
 from .runtime_adapter import CodexFact
 from .tape_events import TapeEvent, make_tape_event
-from .new_thread_materialization import compact_continuity_binding_event
 
 
-def project_codex_facts_to_tape_events(
+def project_compaction_events(
     facts: Iterable[CodexFact],
     *,
     session_id: str,
@@ -16,27 +15,15 @@ def project_codex_facts_to_tape_events(
     initiator: str = "bub_runtime",
     reason: str = "user_requested",
 ) -> list[TapeEvent]:
-    """Project normalized Codex facts to a conservative Bub tape event slice.
+    """Project Codex compaction facts into a new Anchor bound to the same thread."""
 
-    v0 only materializes the compact path because the SDK spike currently proves
-    compact notifications and rollout snapshots. New-thread materialization will
-    use the same TapeEvent shape once the context assembler exists.
-    """
-
-    facts_list = list(facts)
-    snapshots = [fact for fact in facts_list if fact.kind == "codex.compaction.snapshot"]
     events: list[TapeEvent] = []
-
-    for fact in facts_list:
+    for fact in facts:
         if fact.kind != "codex.thread.compacted":
             continue
 
-        snapshot = _best_snapshot_for_compaction(fact, snapshots)
         anchor_creation_id = _stable_id("anchor_creation", fact.event_id)
         anchor_id = _stable_id("anchor", fact.event_id)
-        snapshot_ref = snapshot.event_id if snapshot else None
-        summary_status = _summary_status(snapshot)
-
         common = {
             "session_id": session_id,
             "tape_id": tape_id,
@@ -66,37 +53,11 @@ def project_codex_facts_to_tape_events(
                 payload={
                     "anchor_creation_id": anchor_creation_id,
                     "trigger": _compact_trigger(initiator, reason),
-                    "snapshot_ref": snapshot_ref,
-                    "parse_status": snapshot.payload.get("parse_status") if snapshot else None,
                     "source_fact_id": fact.event_id,
                 },
                 **common,
             )
         )
-
-        if snapshot:
-            events.append(
-                make_tape_event(
-                    "codex.compaction.snapshot",
-                    payload={
-                        "anchor_creation_id": anchor_creation_id,
-                        "source_fact_id": snapshot.event_id,
-                        "parse_status": snapshot.payload.get("parse_status"),
-                        "message_sha256": snapshot.payload.get("message_sha256"),
-                        "replacement_history_len": snapshot.payload.get(
-                            "replacement_history_len"
-                        ),
-                        "replacement_history_sha256": snapshot.payload.get(
-                            "replacement_history_sha256"
-                        ),
-                    },
-                    occurred_at=snapshot.occurred_at,
-                    session_id=session_id,
-                    tape_id=tape_id,
-                    thread_id=fact.thread_id,
-                    turn_id=fact.turn_id,
-                )
-            )
 
         events.append(
             make_tape_event(
@@ -107,15 +68,14 @@ def project_codex_facts_to_tape_events(
                     "reason": reason,
                     "created_at": fact.occurred_at,
                     "state": {
-                        "summary": snapshot.payload.get("message") if snapshot else None,
-                        "summary_status": summary_status,
+                        "summary": None,
+                        "summary_status": "unavailable",
                     },
                     "refs": {
                         "source_anchor_creation_id": anchor_creation_id,
                         "thread_id": fact.thread_id,
                         "turn_id": fact.turn_id,
                         "source_fact_id": fact.event_id,
-                        "snapshot_fact_id": snapshot_ref,
                     },
                     "initiator": initiator,
                 },
@@ -124,7 +84,7 @@ def project_codex_facts_to_tape_events(
             )
         )
         events.append(
-            compact_continuity_binding_event(
+            _compact_continuity_binding_event(
                 session_id=session_id,
                 tape_id=tape_id,
                 anchor_id=anchor_id,
@@ -132,41 +92,12 @@ def project_codex_facts_to_tape_events(
                 previous_thread_id=fact.thread_id,
                 anchor_creation_id=anchor_creation_id,
                 source_fact_id=fact.event_id,
-                snapshot_fact_id=snapshot_ref,
                 turn_id=fact.turn_id,
                 occurred_at=fact.occurred_at,
             )
         )
 
     return events
-
-
-def _best_snapshot_for_compaction(
-    compaction: CodexFact,
-    snapshots: list[CodexFact],
-) -> CodexFact | None:
-    if not snapshots:
-        return None
-    if len(snapshots) == 1:
-        return snapshots[0]
-
-    after = [
-        snapshot
-        for snapshot in snapshots
-        if snapshot.occurred_at and compaction.occurred_at and snapshot.occurred_at >= compaction.occurred_at
-    ]
-    return after[0] if after else snapshots[-1]
-
-
-def _summary_status(snapshot: CodexFact | None) -> str:
-    if snapshot is None:
-        return "unavailable"
-    parse_status = snapshot.payload.get("parse_status")
-    if parse_status == "ok" and snapshot.payload.get("message"):
-        return "ok"
-    if isinstance(parse_status, str):
-        return parse_status
-    return "parse_failed"
 
 
 def _compact_trigger(initiator: str, reason: str) -> str:
@@ -177,6 +108,40 @@ def _compact_trigger(initiator: str, reason: str) -> str:
     return "bub_anchor_compact"
 
 
+def _compact_continuity_binding_event(
+    *,
+    session_id: str,
+    tape_id: str,
+    anchor_id: str,
+    thread_id: str | None,
+    previous_thread_id: str | None,
+    anchor_creation_id: str,
+    source_fact_id: str,
+    turn_id: str | None = None,
+    occurred_at: str | None = None,
+) -> TapeEvent:
+    return make_tape_event(
+        "codex.thread.bound",
+        payload={
+            "anchor_id": anchor_id,
+            "thread_id": thread_id,
+            "previous_thread_id": previous_thread_id,
+            "reason": "compact_continuity",
+            "archived_previous": False,
+            "refs": {
+                "source_anchor_creation_id": anchor_creation_id,
+                "source_fact_id": source_fact_id,
+            },
+        },
+        occurred_at=occurred_at,
+        session_id=session_id,
+        tape_id=tape_id,
+        anchor_id=anchor_id,
+        thread_id=thread_id,
+        turn_id=turn_id,
+    )
+
+
 def _stable_id(prefix: str, value: str) -> str:
-    digest = hashlib.sha256(f"{prefix}:{value}".encode("utf-8")).hexdigest()[:24]
+    digest = sha256_text(f"{prefix}:{value}")[:24]
     return f"{prefix}_{digest}"

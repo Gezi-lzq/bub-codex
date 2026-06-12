@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, Iterable
 
+from .json_utils import JsonObject, dict_or_empty, optional_str, preview_json, sha256_json
 from .runtime_adapter import CodexFact
-from .tape_events import JsonObject, TapeEvent, make_tape_event
+from .tape_events import TapeEvent, make_tape_event
 
 
 TOOL_ITEM_TYPES = {
@@ -31,31 +30,14 @@ def project_tool_events(
 ) -> list[TapeEvent]:
     events: list[TapeEvent] = []
     for fact in facts:
-        if fact.kind not in {"codex.item.started", "codex.item.completed"}:
-            continue
-
-        item = _dict_or_empty(fact.payload.get("item"))
-        item_type = _optional_str(item.get("type"))
-        if item_type in TOOL_ITEM_TYPES:
-            events.append(
-                _project_tool_item(
-                    fact,
-                    item=item,
-                    session_id=session_id,
-                    tape_id=tape_id,
-                    anchor_id=anchor_id,
-                )
-            )
-        elif item_type in SIDE_EFFECT_ITEM_TYPES:
-            events.append(
-                _project_side_effect_item(
-                    fact,
-                    item=item,
-                    session_id=session_id,
-                    tape_id=tape_id,
-                    anchor_id=anchor_id,
-                )
-            )
+        event = project_tool_event(
+            fact,
+            session_id=session_id,
+            tape_id=tape_id,
+            anchor_id=anchor_id,
+        )
+        if event is not None:
+            events.append(event)
     return events
 
 
@@ -69,8 +51,8 @@ def project_tool_event(
     if fact.kind not in {"codex.item.started", "codex.item.completed"}:
         return None
 
-    item = _dict_or_empty(fact.payload.get("item"))
-    item_type = _optional_str(item.get("type"))
+    item = dict_or_empty(fact.payload.get("item"))
+    item_type = optional_str(item.get("type"))
     if item_type in TOOL_ITEM_TYPES:
         return _project_tool_item(
             fact,
@@ -112,10 +94,10 @@ def _project_tool_item(
             "tool_name": _tool_name(item_type, item),
             "status": item.get("status"),
             "executor": _executor(item_type, item),
-            "input_sha256": _sha256_json(input_payload),
-            "input_preview": _preview(input_payload),
-            "output_sha256": _sha256_json(output_payload) if output_payload is not None else None,
-            "output_preview": _preview(output_payload) if output_payload is not None else None,
+            "input_sha256": sha256_json(input_payload),
+            "input_preview": preview_json(input_payload),
+            "output_sha256": sha256_json(output_payload) if output_payload is not None else None,
+            "output_preview": preview_json(output_payload) if output_payload is not None else None,
             "source_item_id": fact.item_id,
             "source_fact_id": fact.event_id,
         },
@@ -141,8 +123,8 @@ def _project_side_effect_item(
         "change_id": item.get("id") or fact.item_id,
         "side_effect_kind": item.get("type"),
         "status": item.get("status"),
-        "changes_sha256": _sha256_json(item.get("changes")),
-        "changes_preview": _preview(item.get("changes")),
+        "changes_sha256": sha256_json(item.get("changes")),
+        "changes_preview": preview_json(item.get("changes")),
         "source_item_id": fact.item_id,
         "source_fact_id": fact.event_id,
     }
@@ -169,18 +151,18 @@ def _tool_name(item_type: str, item: JsonObject) -> str:
     if item_type == "commandExecution":
         return "shell_command"
     if item_type == "mcpToolCall":
-        server = _optional_str(item.get("server"))
-        tool = _optional_str(item.get("tool")) or "mcp_tool"
+        server = optional_str(item.get("server"))
+        tool = optional_str(item.get("tool")) or "mcp_tool"
         return f"{server}/{tool}" if server else tool
     if item_type == "dynamicToolCall":
-        namespace = _optional_str(item.get("namespace"))
-        tool = _optional_str(item.get("tool")) or "dynamic_tool"
+        namespace = optional_str(item.get("namespace"))
+        tool = optional_str(item.get("tool")) or "dynamic_tool"
         return f"{namespace}/{tool}" if namespace else tool
     if item_type == "collabAgentToolCall":
-        return _optional_str(item.get("tool")) or "collab_tool"
+        return optional_str(item.get("tool")) or "collab_tool"
     if item_type == "webSearch":
-        action = _dict_or_empty(item.get("action"))
-        return _optional_str(action.get("type")) or "web_search"
+        action = dict_or_empty(item.get("action"))
+        return optional_str(action.get("type")) or "web_search"
     if item_type == "imageView":
         return "image_view"
     return item_type
@@ -188,7 +170,7 @@ def _tool_name(item_type: str, item: JsonObject) -> str:
 
 def _executor(item_type: str, item: JsonObject) -> str:
     if item_type == "commandExecution":
-        source = _optional_str(item.get("source"))
+        source = optional_str(item.get("source"))
         return f"codex_runtime:{source}" if source else "codex_runtime"
     if item_type == "dynamicToolCall":
         return "client_dynamic_tool"
@@ -264,28 +246,3 @@ def _tool_output_payload(item_type: str, item: JsonObject) -> Any:
     if item_type in {"webSearch", "imageView"}:
         return None
     return None
-
-
-def _preview(value: Any, *, max_chars: int = 800) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        text = value
-    else:
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-    return text[:max_chars]
-
-
-def _sha256_json(value: Any) -> str | None:
-    if value is None:
-        return None
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _dict_or_empty(value: Any) -> JsonObject:
-    return value if isinstance(value, dict) else {}
-
-
-def _optional_str(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None

@@ -1,0 +1,235 @@
+# Integration Contracts
+
+This plugin depends on two external systems: Bub owns the conversation runtime,
+and the Codex Python SDK owns Codex threads and turns. The code should only
+depend on the parts listed here. Everything else is an implementation detail.
+
+## Bub Contract
+
+`bub-codex` implements Bub's `run_model_stream` hook:
+
+```python
+run_model_stream(prompt: str | list[dict], session_id: str, state: State) -> AsyncStreamEvents
+```
+
+The plugin assumes Bub has already resolved the session, loaded state, and built
+the prompt. Bub remains responsible for saving state, rendering outbound
+messages, and dispatching them.
+
+Runtime state used by this plugin:
+
+- `state["_runtime_workspace"]`: optional workspace path. If absent, the live
+  runtime uses `"."`.
+- `state["_runtime_agent"]`: required only for comma-command delegation. It must
+  expose `run(session_id=..., prompt=..., state=...)`; the result may be sync or
+  awaitable.
+
+The plugin exposes configuration through Bub's config registry:
+
+```python
+@bub.config(name="codex")
+class BubCodexSettings(...)
+```
+
+Settings are loaded with `bub.ensure_config(BubCodexSettings)` and may also come
+from `BUB_CODEX_` environment variables.
+
+## Bub Stream Contract
+
+Bub stream output is Republic `AsyncStreamEvents`:
+
+```python
+AsyncStreamEvents(iterator: AsyncIterator[StreamEvent], *, state: StreamState | None = None)
+StreamEvent(kind: "text" | "tool_call" | "tool_result" | "usage" | "error" | "final", data: dict)
+StreamState(error=None, usage=None)
+```
+
+`bub-codex` emits only:
+
+- `text`: user-visible assistant text deltas.
+- `error`: runtime failure details.
+- `final`: terminal result with `{ "text": str, "ok": bool }`.
+
+Assistant commentary is written to tape but is not emitted as user-visible text.
+
+## Bub Tape Contract
+
+The internal runtime uses a narrow append-only `TapeStore` port:
+
+```python
+append(event: TapeEvent) -> None
+append_many(events: Iterable[TapeEvent]) -> None
+events(session_id: str | None = None, tape_id: str | None = None) -> list[TapeEvent]
+```
+
+`RepublicTapeStoreAdapter` is the only place that translates between this port
+and Republic tape storage. It depends on:
+
+- `TapeEntry.event(name, data, **meta)` for bub-codex events.
+- `TapeEntry.anchor(name, state, **meta)` for native Bub anchors.
+- `TapeQuery(tape=..., store=...)` plus store `fetch_all(query)` when the store
+  does not expose `read(tape_id)`.
+
+Async Republic tape stores are rejected by the live runtime today. That is an
+explicit boundary, not an implicit state-machine branch.
+
+## Bub Tool Contract
+
+The plugin exposes a small allowlist of Bub tape tools to Codex:
+
+- `tape.info`
+- `tape.search`
+- `tape.anchors`
+- `tape.handoff`
+
+These come from `bub.tools.REGISTRY` after importing `bub.builtin.tools`.
+
+The adapter depends on Bub/Republic tool objects having:
+
+- `name: str`
+- `description: str | None`
+- `parameters: dict`
+- `context: bool`
+- `run(**kwargs)` or `handler(**kwargs)`
+
+Tool names are converted for Codex by replacing non `[a-zA-Z0-9_-]` characters
+with `_`. For example, `tape.handoff` becomes Codex dynamic tool name
+`tape_handoff` in namespace `bub`.
+
+Context-aware tools receive a `ToolContext` with:
+
+- `tape`: current tape id
+- `run_id`: Codex turn id, tool call id, or fallback id
+- `state`: Bub state plus runtime ids
+
+## Codex SDK Contract
+
+The plugin integrates with the Codex Python SDK through
+`openai_codex.client.CodexClient` and `CodexConfig`.
+
+Client construction:
+
+```python
+CodexConfig(
+    codex_bin: str | None,
+    cwd: str,
+    config_overrides: tuple[str, ...],
+    env: dict[str, str] | None,
+    experimental_api: True,
+)
+CodexClient(config=..., approval_handler=...)
+```
+
+Lifecycle:
+
+```python
+client.start()
+client.initialize()
+client.close()  # when available
+```
+
+Thread and turn operations:
+
+```python
+thread_start(params: dict) -> response.thread.id
+thread_resume(thread_id: str, params: dict)
+turn_start(thread_id: str, input_items: str | list[dict] | dict, params: dict) -> response.turn.id
+next_turn_notification(turn_id: str) -> Notification
+unregister_turn_notifications(turn_id: str)
+thread_read(thread_id: str, include_turns: bool = False)
+```
+
+`codex_thread_service.CodexClientPort` is the internal port for these methods.
+Code outside `codex_thread_service` should not call Codex SDK thread or turn
+methods directly.
+
+The plugin treats `next_turn_notification` as a blocking iterator source for one
+turn. It filters notifications by thread id and stops only on the current
+thread's `turn/completed`.
+
+Notification payloads may be SDK models. `codex_thread_service` is the only
+place that converts them with `model_dump(mode="json", by_alias=True,
+exclude_none=False)`. Downstream code receives plain JSON-like dictionaries.
+
+## Codex Dynamic Tool Contract
+
+The generated `ThreadStartParams` model does not define `dynamicTools`. The
+Codex Python SDK also accepts raw JSON params and forwards them to the app
+server. `bub-codex` keeps that app-server extension isolated in
+`ThreadStartOptions`; no other module should build this payload directly.
+
+The plugin registers Codex dynamic tools through raw `thread_start` params:
+
+```json
+{
+  "dynamicTools": [
+    {
+      "namespace": "bub",
+      "name": "tape_handoff",
+      "description": "...",
+      "inputSchema": {"type": "object", "properties": {...}}
+    }
+  ]
+}
+```
+
+The SDK calls the approval handler with server-request methods. The plugin
+handles:
+
+- `item/tool/call`: dispatch to a registered Bub dynamic tool.
+- `item/commandExecution/requestApproval`: accept.
+- `item/fileChange/requestApproval`: accept.
+
+Unknown methods return `{}`.
+
+`thread_resume` is called only with documented resume fields today: `cwd`,
+`approvalPolicy`, and `sandbox`. Do not add `dynamicTools` to resume unless the
+SDK or app-server contract is verified and covered by tests.
+
+## Runtime State Machine
+
+The state machine is tape-first:
+
+```text
+no committed Anchor
+  -> create session_start Anchor
+  -> materialize Codex thread
+  -> bind thread to Anchor
+
+latest Anchor has no codex.thread.bound
+  -> materialize Codex thread
+  -> bind thread to Anchor
+
+latest Anchor has codex.thread.bound
+  -> resume that Codex thread
+```
+
+Resume failure is surfaced as an error. It does not silently create a replacement
+thread.
+
+Materialization prepares `MaterializedContextInput` once. The exact text sent to
+Codex is also the text hashed into `bub.context.materialized.input_sha256`.
+
+`RuntimeStreamService.current_tape_store()` is the plugin-facing port for
+comma-command handoff recording. `LazyRuntimeStreamService` may initialize and
+cache the live runtime to provide a stable tape store before the first normal
+chat turn. If Bub has no active tape store, comma handoff delegation still runs,
+but no bub-codex Anchor is recorded.
+
+## Extension Boundaries
+
+Future deeper integration should extend one of these ports instead of spreading
+SDK or Bub details through the codebase:
+
+- `TapeStore` for richer or async tape persistence.
+- `CodexThreadContextAdapter` / `CodexThreadService` for new Codex thread or turn
+  capabilities.
+- `runtime_adapter.facts_from_notification_record` for new Codex notification
+  methods.
+- `tool_projection` for new tool item types.
+- `compact_projection` only when the adapter produces a real compaction fact
+  that the current runtime uses.
+- `BubToolRuntimeContext` for new fields passed to Bub tools.
+
+Do not add speculative event fields or modules for SDK behavior that is not
+produced by the current adapter or required by a current workflow.

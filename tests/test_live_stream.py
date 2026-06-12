@@ -17,7 +17,6 @@ if str(TESTS) not in sys.path:
 
 from bub_codex.codex_thread_service import ThreadMaterialization  # noqa: E402
 from bub_codex.live_stream import BubCodexLiveRuntimeStreamService  # noqa: E402
-from bub_codex.plugin_stream_integration import run_plugin_stream_once  # noqa: E402
 from bub_codex.runtime import BubCodexRuntime  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from codex_record_builders import (  # noqa: E402
@@ -29,6 +28,7 @@ from codex_record_builders import (  # noqa: E402
     turn_completed,
     turn_started,
 )
+from plugin_stream_helpers import run_plugin_stream_once  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -37,17 +37,10 @@ class FakeMaterializingThreadService:
     resumed: list[str] = field(default_factory=list)
     fail_resume: bool = False
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
         thread_id = f"codex-thread-{len(self.created) + 1}"
         self.created.append(thread_id)
-        return ThreadMaterialization(
-            thread_id=thread_id,
-            turn_id="materialization-turn-1",
-            notification_records=(
-                turn_started(thread_id=thread_id, turn_id="materialization-turn-1"),
-                turn_completed(thread_id=thread_id, turn_id="materialization-turn-1"),
-            ),
-        )
+        return ThreadMaterialization(thread_id=thread_id)
 
     def resume_thread(self, thread_id: str) -> None:
         if self.fail_resume:
@@ -56,7 +49,12 @@ class FakeMaterializingThreadService:
 
 
 class FakeTurnStreamService:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
     def start_turn_stream(self, *, thread_id: str, cwd: str, prompt: str):
+        self.prompts.append(prompt)
+
         def records():
             turn_id = "user-turn-1"
             yield turn_started(thread_id=thread_id, turn_id=turn_id)
@@ -181,7 +179,7 @@ class FailingTurnStreamService:
 
 @dataclass(slots=True)
 class FailingMaterializationThreadService:
-    def materialize_thread(self, *, cwd: str, anchor_id: str, intent: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
         raise RuntimeError("codex materialization failed")
 
     def resume_thread(self, thread_id: str) -> None:
@@ -238,8 +236,6 @@ class LiveStreamTest(unittest.TestCase):
                 "bub.anchor.creation.started",
                 "bub.anchor.created",
                 "bub.context.materialized",
-                "codex.turn.materialization.started",
-                "codex.turn.materialization.completed",
                 "codex.thread.bound",
                 "codex.turn.started",
                 "codex.assistant_message.completed",
@@ -253,6 +249,32 @@ class LiveStreamTest(unittest.TestCase):
             event for event in result.tape_events if event.type == "codex.assistant_message.completed"
         ]
         self.assertEqual([event.payload["phase"] for event in assistant_events], ["commentary", "final_answer"])
+
+    def test_live_bridge_wraps_startup_context_on_created_thread_prompt(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            stream_service = FakeTurnStreamService()
+            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, stream_service)
+            await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={"_runtime_workspace": "/workspace"},
+                tape_store=store,
+            )
+            return stream_service
+
+        stream_service = asyncio.run(run())
+        prompt = stream_service.prompts[0]
+
+        self.assertIn("Startup context:\n", prompt)
+        self.assertIn('"workspace_metadata"', prompt)
+        self.assertTrue(prompt.endswith("\n\nUser message:\nhello"))
+        self.assertNotIn("Anchor", prompt)
+        self.assertNotIn("materialized", prompt)
+        self.assertNotIn("tape", prompt)
+        self.assertNotIn("thread", prompt.lower())
 
     def test_live_bridge_streams_final_answer_delta_without_duplicate_completed_text(self) -> None:
         async def run():
@@ -297,10 +319,11 @@ class LiveStreamTest(unittest.TestCase):
             store.append_many([anchor, binding])
             threads = FakeMaterializingThreadService()
             runtime = BubCodexRuntime(store, threads)
+            stream_service = FakeTurnStreamService()
             live = BubCodexLiveRuntimeStreamService(
                 runtime.context_kernel,
                 store,
-                FakeTurnStreamService(),
+                stream_service,
                 tape_id_factory=_test_tape_id_factory,
             )
             result = await run_plugin_stream_once(
@@ -310,13 +333,14 @@ class LiveStreamTest(unittest.TestCase):
                 state={"_runtime_workspace": "/workspace"},
                 tape_store=store,
             )
-            return result, threads
+            return result, threads, stream_service
 
-        result, threads = asyncio.run(run())
+        result, threads, stream_service = asyncio.run(run())
 
         self.assertEqual(threads.created, [])
         self.assertEqual(threads.resumed, ["codex-thread-existing"])
         self.assertEqual(result.final_text, "Final answer.")
+        self.assertEqual(stream_service.prompts, ["hello"])
         self.assertEqual(
             [event.type for event in result.tape_events[:2]],
             ["bub.anchor.created", "codex.thread.bound"],
@@ -401,7 +425,7 @@ class LiveStreamTest(unittest.TestCase):
         self.assertEqual(event_types[0], "bub.anchor.created")
         self.assertIn("bub.context.materialized", event_types)
         self.assertIn("codex.thread.bound", event_types)
-        self.assertLess(event_types.index("codex.turn.materialization.completed"), event_types.index("codex.thread.bound"))
+        self.assertLess(event_types.index("bub.context.materialized"), event_types.index("codex.thread.bound"))
 
     def test_live_bridge_projects_compaction_notification_to_anchor(self) -> None:
         class CompactingTurnStreamService(FakeTurnStreamService):

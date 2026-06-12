@@ -6,7 +6,8 @@ import subprocess
 import sys
 
 
-EXPECTED_LINE = "run_model_stream: builtin, codex"
+EXPECTED_HOOK = "run_model_stream"
+EXPECTED_PLUGIN = "codex"
 
 
 def main() -> int:
@@ -30,15 +31,26 @@ def main() -> int:
             print(output, file=sys.stderr)
         return result.returncode
 
-    if EXPECTED_LINE not in result.stdout:
+    plugins = _hook_plugins(result.stdout, EXPECTED_HOOK)
+    if EXPECTED_PLUGIN not in plugins:
         print("bub-codex plugin was not discovered by Bub.", file=sys.stderr)
-        print(f"expected hook report line: {EXPECTED_LINE}", file=sys.stderr)
+        print(f"expected {EXPECTED_PLUGIN!r} under {EXPECTED_HOOK!r}", file=sys.stderr)
         if output:
             print(output, file=sys.stderr)
         return 1
 
-    print(f"OK: Bub discovered installed bub-codex plugin ({EXPECTED_LINE}).")
+    print(f"OK: Bub discovered installed bub-codex plugin under {EXPECTED_HOOK}.")
     return 0
+
+
+def _hook_plugins(output: str, hook_name: str) -> set[str]:
+    prefix = f"{hook_name}:"
+    for line in output.splitlines():
+        if not line.startswith(prefix):
+            continue
+        names = line[len(prefix) :].strip()
+        return {name.strip() for name in names.split(",") if name.strip()}
+    return set()
 
 
 if __name__ == "__main__":

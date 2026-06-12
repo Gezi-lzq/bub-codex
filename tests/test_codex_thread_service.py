@@ -13,21 +13,12 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from bub_codex.codex_thread_service import MaterializingCodexThreadService, _default_initial_prompt  # noqa: E402
+from bub_codex.codex_thread_service import MaterializingCodexThreadService  # noqa: E402
 from bub_codex.codex_client import DynamicToolSpec  # noqa: E402
 from codex_record_builders import agent_message_completed, turn_completed, turn_started  # noqa: E402
 
 
 class MaterializingCodexThreadServiceTest(unittest.TestCase):
-    def test_default_materialization_prompt_includes_anchor_materialized_context(self) -> None:
-        prompt = _default_initial_prompt("anchor-1", "anchor-derived context")
-
-        self.assertIn("anchor-1", prompt)
-        self.assertIn("Materialized context:", prompt)
-        self.assertIn("anchor-derived context", prompt)
-        self.assertIn("Do not answer or execute the user's task", prompt)
-        self.assertNotIn("Intent:", prompt)
-
     def test_stream_records_ignore_foreign_thread_completed_without_ending_current_turn(self) -> None:
         client = FakeCodexClient(
             [
@@ -88,7 +79,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         self.assertTrue(client.closed)
 
     def test_materialization_registers_dynamic_tools_on_thread_start(self) -> None:
-        client = FakeCodexClient([_event(turn_completed(thread_id="thread-1", turn_id="turn-1"))])
+        client = FakeCodexClient([])
         tool = DynamicToolSpec(
             namespace="bub",
             name="tape_handoff",
@@ -100,12 +91,59 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         materialization = service.materialize_thread(
             cwd="/workspace",
             anchor_id="anchor-1",
-            intent="context",
+            materialized_context="context",
         )
 
         self.assertEqual(materialization.thread_id, "thread-1")
+        self.assertIsNone(materialization.turn_id)
+        self.assertEqual(materialization.notification_records, ())
         self.assertEqual(client.thread_start_options[0]["dynamicTools"][0]["namespace"], "bub")
         self.assertEqual(client.thread_start_options[0]["dynamicTools"][0]["name"], "tape_handoff")
+
+    def test_materialization_does_not_start_a_hidden_codex_turn(self) -> None:
+        client = FakeCodexClient([])
+        service = MaterializingCodexThreadService(client, cwd="/workspace")
+
+        service.materialize_thread(
+            cwd="/workspace",
+            anchor_id="anchor-1",
+            materialized_context="context",
+        )
+
+        self.assertEqual(client.turn_start_calls, [])
+        self.assertEqual(client.unregistered_turn_ids, [])
+
+    def test_resume_uses_only_verified_thread_resume_fields(self) -> None:
+        client = FakeCodexClient([])
+        tool = DynamicToolSpec(
+            namespace="bub",
+            name="tape_handoff",
+            description="Add a handoff anchor",
+            input_schema={"type": "object", "properties": {}},
+        )
+        service = MaterializingCodexThreadService(
+            client,
+            cwd="/workspace",
+            approval_policy="never",
+            sandbox="danger-full-access",
+            dynamic_tools=(tool,),
+        )
+
+        service.resume_thread("thread-1")
+
+        self.assertEqual(
+            client.thread_resume_calls,
+            [
+                (
+                    "thread-1",
+                    {
+                        "cwd": "/workspace",
+                        "approvalPolicy": "never",
+                        "sandbox": "danger-full-access",
+                    },
+                )
+            ],
+        )
 
 
 class FakeCodexClient:
@@ -113,16 +151,20 @@ class FakeCodexClient:
         self.events = list(events)
         self.unregistered_turn_ids: list[str] = []
         self.thread_start_options: list[dict] = []
+        self.thread_resume_calls: list[tuple[str, dict]] = []
+        self.turn_start_calls: list[tuple[str, str, dict]] = []
         self.closed = False
 
     def thread_start(self, options):
         self.thread_start_options.append(options)
         return SimpleNamespace(thread=SimpleNamespace(id="thread-1"))
 
-    def thread_read(self, thread_id: str, include_turns: bool):
+    def thread_resume(self, thread_id: str, params: dict):
+        self.thread_resume_calls.append((thread_id, params))
         return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
 
     def turn_start(self, thread_id: str, prompt: str, options):
+        self.turn_start_calls.append((thread_id, prompt, options))
         return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
 
     def next_turn_notification(self, turn_id: str):
