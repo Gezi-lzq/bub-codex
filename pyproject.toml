@@ -1,0 +1,26 @@
+[project]
+name = "bub-codex"
+version = "0.1.0"
+description = "Bub-native Codex runtime plugin"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "bub>=0.3.8",
+    "openai-codex==0.1.0b3",
+    "openai-codex-cli-bin==0.137.0a4",
+    "republic>=0.5.8",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+]
+
+[project.urls]
+Repository = "https://github.com/Gezi-lzq/bub-codex"
+Issues = "https://github.com/Gezi-lzq/bub-codex/issues"
+
+[project.entry-points."bub"]
+codex = "bub_codex.plugin:create_plugin"
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.12.0"]
+build-backend = "uv_build"
