@@ -44,6 +44,12 @@ class BubCodexPlugin:
     def __init__(self, runtime: RuntimeStreamService | None = None) -> None:
         self.runtime = runtime or UnconfiguredRuntimeStreamService()
 
+    @hookimpl(optionalhook=True)
+    def admit_message(self, session_id: str, message: Any, turn: Any) -> Any:
+        if getattr(turn, "is_running", False):
+            return _admit_decision("steer", reason="codex turn is running")
+        return None
+
     @hookimpl
     async def run_model_stream(self, prompt: str | list[dict], session_id: str, state: State) -> AsyncStreamEvents:
         if _is_comma_command(prompt):
@@ -136,3 +142,11 @@ def _handoff_summary(args: list[str]) -> str | None:
         return " ".join(positional)
     name = values.get("name")
     return name if name else None
+
+
+def _admit_decision(action: str, *, reason: str | None = None) -> Any:
+    try:
+        from bub.turn_admission import AdmitDecision
+    except ImportError:
+        return {"action": action, "reason": reason}
+    return AdmitDecision(action=action, reason=reason)

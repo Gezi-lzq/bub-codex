@@ -35,7 +35,7 @@ Bub run_model_stream
   -> resolve workspace and tape id
   -> find or create a Codex thread for the Bub session
   -> start a Codex turn through the Codex SDK
-  -> consume Codex SDK notifications
+  -> consume Codex SDK notifications and Bub steering messages
   -> append selected runtime events to Bub tape
   -> emit Bub stream text/final output
 ```
@@ -50,7 +50,7 @@ accepted because each file owns a concrete side-effect boundary or invariant:
 
 | File | Owns |
 | --- | --- |
-| `plugin.py` | Bub hook surface and comma-command delegation |
+| `plugin.py` | Bub hook surface, turn admission, and comma-command delegation |
 | `runtime_services.py` | dependency assembly and lazy runtime lifecycle |
 | `runtime_context.py` | tape-backed create/resume state machine |
 | `new_thread_materialization.py` | startup context evidence and thread-binding events |
@@ -141,6 +141,12 @@ startup context in tape. It does not run a hidden initialization model turn.
 The startup context is wrapped into the first real user turn; resumed turns send
 the raw user prompt.
 
+When Bub supports turn admission, messages received during an active turn are
+admitted as `steer` decisions. Bub queues them in `state["_runtime_steering"]`;
+`live_stream.py` drains that buffer during the current turn and
+`codex_thread_service.py` forwards the text through Codex SDK `turn_steer`.
+This does not create a new Bub turn, Codex thread, or Codex turn.
+
 ## Tape Projection
 
 Codex SDK notifications are converted into Bub tape events for the parts of the
@@ -184,6 +190,7 @@ Before large changes, check these invariants:
 - projection files consume `CodexFact`, not raw SDK payloads;
 - second and later turns in the same session do not receive startup context;
 - no hidden initialization model turn is introduced;
+- steering input targets the active Codex turn and does not create a new turn;
 - projection remains value-based, not a mirror of Codex SDK notifications;
 - new files must earn their boundary by owning a distinct invariant or side
   effect.

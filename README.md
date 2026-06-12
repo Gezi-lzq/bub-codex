@@ -15,6 +15,7 @@ live `run_model_stream` through the Codex SDK and stores continuity in Bub tape.
 - Bub plugin entry point: `codex`
 - `run_model_stream` backed by the Codex SDK
 - Codex thread resume from Bub tape history
+- in-turn steering when Bub provides the `admit_message` hook
 - Codex compaction recorded as Bub Anchors
 - Bub comma-command delegation back to the builtin Bub agent
 - Bub tape tools exposed to Codex as dynamic tools
@@ -86,6 +87,10 @@ uv run bub --workspace /path/to/workspace chat --session-id my-session
 
 Normal chat turns are handled by Codex. Bub comma commands, such as `,help`, are
 still handled by Bub.
+
+On Bub versions with turn admission support, a message sent while Codex is still
+running is steered into the active Codex turn instead of starting a competing
+turn. Older Bub versions continue to load the plugin and use normal chat turns.
 
 `tape.handoff` is supported from both sides:
 

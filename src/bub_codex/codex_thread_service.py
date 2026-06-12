@@ -29,6 +29,9 @@ class CodexClientPort(Protocol):
     def next_turn_notification(self, turn_id: str) -> Any:
         ...
 
+    def turn_steer(self, thread_id: str, expected_turn_id: str, input_items: str) -> Any:
+        ...
+
     def unregister_turn_notifications(self, turn_id: str) -> None:
         ...
 
@@ -55,6 +58,9 @@ class CodexTurnSession:
 
     def records(self) -> Iterator[JsonObject]:
         yield from _iter_turn_records(self.client, turn_id=self.turn_id, thread_id=self.thread_id)
+
+    def steer(self, input_text: str) -> None:
+        self.client.turn_steer(self.thread_id, self.turn_id, input_text)
 
     def close(self) -> None:
         self.client.unregister_turn_notifications(self.turn_id)

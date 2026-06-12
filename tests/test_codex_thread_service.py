@@ -70,6 +70,19 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
 
         self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
 
+    def test_turn_session_steers_current_codex_turn(self) -> None:
+        client = FakeCodexClient([])
+        service = MaterializingCodexThreadService(client, cwd="/workspace")
+
+        session = service.start_turn_stream(
+            thread_id="current-thread",
+            cwd="/workspace",
+            prompt="hello",
+        )
+        session.steer("adjust course")
+
+        self.assertEqual(client.turn_steer_calls, [("current-thread", "turn-1", "adjust course")])
+
     def test_close_closes_underlying_codex_client_when_supported(self) -> None:
         client = FakeCodexClient([])
         service = MaterializingCodexThreadService(client, cwd="/workspace")
@@ -151,6 +164,7 @@ class FakeCodexClient:
         self.thread_start_options: list[dict] = []
         self.thread_resume_calls: list[tuple[str, dict]] = []
         self.turn_start_calls: list[tuple[str, str, dict]] = []
+        self.turn_steer_calls: list[tuple[str, str, str]] = []
         self.closed = False
 
     def thread_start(self, options):
@@ -167,6 +181,10 @@ class FakeCodexClient:
 
     def next_turn_notification(self, turn_id: str):
         return self.events.pop(0)
+
+    def turn_steer(self, thread_id: str, expected_turn_id: str, input_items: str):
+        self.turn_steer_calls.append((thread_id, expected_turn_id, input_items))
+        return SimpleNamespace()
 
     def unregister_turn_notifications(self, turn_id: str) -> None:
         self.unregistered_turn_ids.append(turn_id)

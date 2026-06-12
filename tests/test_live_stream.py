@@ -96,15 +96,30 @@ class FakeTurnStreamService:
 class StreamRecordsTurnSession:
     iterator: Any
     closed: bool = False
+    steered: list[str] = field(default_factory=list)
 
     def records(self):
         return self.iterator
+
+    def steer(self, input_text: str) -> None:
+        self.steered.append(input_text)
 
     def close(self) -> None:
         close = getattr(self.iterator, "close", None)
         if callable(close):
             close()
         self.closed = True
+
+
+class CapturingSteeringTurnStreamService(FakeTurnStreamService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session: StreamRecordsTurnSession | None = None
+
+    def start_turn_stream(self, *, thread_id: str, cwd: str, prompt: str):
+        session = super().start_turn_stream(thread_id=thread_id, cwd=cwd, prompt=prompt)
+        self.session = session
+        return session
 
 
 class DeltaTurnStreamService:
@@ -586,6 +601,30 @@ class LiveStreamTest(unittest.TestCase):
             )
         )
 
+    def test_live_bridge_drains_steering_messages_into_active_codex_turn(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            stream_service = CapturingSteeringTurnStreamService()
+            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, stream_service)
+            result = await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={
+                    "_runtime_workspace": "/workspace",
+                    "_runtime_steering": FakeSteeringBuffer([{"content": "please adjust course"}]),
+                },
+                tape_store=store,
+            )
+            return result, stream_service.session
+
+        result, session = asyncio.run(run())
+
+        self.assertEqual(result.final_text, "Final answer.")
+        self.assertIsNotNone(session)
+        self.assertEqual(session.steered, ["please adjust course"])
+
     def test_live_bridge_records_runtime_error_when_turn_stream_fails(self) -> None:
         async def run():
             store = InMemoryTapeStore()
@@ -643,3 +682,13 @@ def _thread_bound_event(*, session_id: str, tape_id: str, anchor_id: str, thread
 
 def _test_tape_id_factory(session_id, state):
     return session_id
+
+
+@dataclass(slots=True)
+class FakeSteeringBuffer:
+    messages: list[dict]
+
+    def get_nowait(self):
+        if not self.messages:
+            return None
+        return self.messages.pop(0)

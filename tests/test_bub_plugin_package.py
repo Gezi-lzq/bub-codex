@@ -94,6 +94,24 @@ class BubPluginPackageTest(unittest.TestCase):
             self.assertIn("codex", report["run_model_stream"])
             self.assertEqual(text, "package lifecycle ok")
 
+    def test_plugin_admits_messages_as_steering_only_while_turn_is_running(self) -> None:
+        plugin = BubCodexPlugin(FakeRuntimeStreamService())
+
+        running = plugin.admit_message(
+            session_id="s1",
+            message={"content": "adjust course"},
+            turn=SimpleNamespace(is_running=True),
+        )
+        idle = plugin.admit_message(
+            session_id="s1",
+            message={"content": "next turn"},
+            turn=SimpleNamespace(is_running=False),
+        )
+
+        self.assertEqual(_decision_field(running, "action"), "steer")
+        self.assertEqual(_decision_field(running, "reason"), "codex turn is running")
+        self.assertIsNone(idle)
+
     def test_comma_handoff_records_anchor_in_codex_runtime_tape(self) -> None:
         store = InMemoryTapeStore()
         runtime = FakeRuntimeStreamService(tape_store=store)
@@ -520,6 +538,12 @@ async def _collect_text(stream) -> str:
         if event.kind == "text":
             parts.append(str(event.data.get("delta", "")))
     return "".join(parts)
+
+
+def _decision_field(decision, field: str):
+    if isinstance(decision, dict):
+        return decision.get(field)
+    return getattr(decision, field, None)
 
 
 class FakeCodexConfig:

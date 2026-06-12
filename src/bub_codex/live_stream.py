@@ -7,12 +7,14 @@ for thread state decisions and on `runtime_adapter.py` for SDK record decoding.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from republic import AsyncStreamEvents, StreamState
 
+from bub.envelope import content_of
 from bub.types import State
 
 from .runtime_adapter import record_belongs_to_thread
@@ -25,8 +27,14 @@ from .tape_store import TapeStore
 from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
 
 
+STEERING_POLL_INTERVAL_SECONDS = 0.05
+
+
 class CodexTurnSession(Protocol):
     def records(self) -> Iterable[JsonObject]:
+        ...
+
+    def steer(self, input_text: str) -> None:
         ...
 
     def close(self) -> None:
@@ -125,6 +133,7 @@ class BubCodexLiveRuntimeStreamService:
                 context=context,
                 cwd=cwd,
                 prompt=prompt_text,
+                state=state,
             ):
                 yield stream_event
 
@@ -140,6 +149,7 @@ async def _iter_live_turn_events(
     context: ExecutableContext,
     cwd: str,
     prompt: str,
+    state: State,
 ):
     translator = CodexTurnTranslator(
         session_id=session_id,
@@ -152,7 +162,7 @@ async def _iter_live_turn_events(
         prompt=prompt_with_startup_context(prompt=prompt, startup_context=context.start.startup_context),
     )
     try:
-        for record in turn_session.records():
+        async for record in _iter_turn_records_with_steering(turn_session, state=state):
             if not record_belongs_to_thread(record, context.thread_id):
                 continue
             translation = translator.accept(record)
@@ -177,6 +187,48 @@ async def _iter_live_turn_events(
         turn_session.close()
     for decision in translator.finish().stream_decisions:
         yield to_stream_event(decision)
+
+
+async def _iter_turn_records_with_steering(
+    turn_session: CodexTurnSession,
+    *,
+    state: State,
+):
+    steering = state.get("_runtime_steering")
+    if not _can_drain_steering(steering):
+        for record in turn_session.records():
+            yield record
+        return
+
+    records = iter(turn_session.records())
+    sentinel = object()
+    while True:
+        next_record = asyncio.create_task(asyncio.to_thread(next, records, sentinel))
+        while not next_record.done():
+            _drain_steering(turn_session, steering)
+            await asyncio.sleep(STEERING_POLL_INTERVAL_SECONDS)
+        record = await next_record
+        _drain_steering(turn_session, steering)
+        if record is sentinel:
+            break
+        yield record
+
+
+def _can_drain_steering(steering: Any) -> bool:
+    return callable(getattr(steering, "get_nowait", None))
+
+
+def _drain_steering(turn_session: CodexTurnSession, steering: Any) -> None:
+    get_nowait = getattr(steering, "get_nowait", None)
+    if not callable(get_nowait):
+        return
+    while True:
+        message = get_nowait()
+        if message is None:
+            return
+        text = content_of(message).strip()
+        if text:
+            turn_session.steer(text)
 
 
 def _stream_error(exc: Exception) -> AsyncStreamEvents:

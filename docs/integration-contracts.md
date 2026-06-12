@@ -16,6 +16,18 @@ The plugin assumes Bub has already resolved the session, loaded state, and built
 the prompt. Bub remains responsible for saving state, rendering outbound
 messages, and dispatching them.
 
+On Bub versions that include turn admission, `bub-codex` also implements the
+optional hook:
+
+```python
+admit_message(session_id: str, message: Envelope, turn: TurnSnapshot) -> AdmitDecision | None
+```
+
+The plugin returns `AdmitDecision(action="steer")` only when Bub reports an
+active turn for the same session. Otherwise it returns `None` so Bub keeps its
+default scheduling behavior. The hook is registered as optional so older Bub
+installations that do not define `admit_message` can still load the plugin.
+
 Runtime state used by this plugin:
 
 - `state["_runtime_workspace"]`: optional workspace path. If absent, the live
@@ -23,6 +35,9 @@ Runtime state used by this plugin:
 - `state["_runtime_agent"]`: required only for comma-command delegation. It must
   expose `run(session_id=..., prompt=..., state=...)`; the result may be sync or
   awaitable.
+- `state["_runtime_steering"]`: optional Bub `SteeringBuffer`. When present, the
+  live runtime consumes messages with `get_nowait()` and sends their textual
+  `content` to the active Codex turn.
 
 The plugin exposes configuration through Bub's config registry:
 
@@ -134,6 +149,7 @@ Thread and turn operations:
 thread_start(params: dict) -> response.thread.id
 thread_resume(thread_id: str, params: dict)
 turn_start(thread_id: str, input_items: str | list[dict] | dict, params: dict) -> response.turn.id
+turn_steer(thread_id: str, expected_turn_id: str, input_items: str | list[dict] | dict)
 next_turn_notification(turn_id: str) -> Notification
 unregister_turn_notifications(turn_id: str)
 thread_read(thread_id: str, include_turns: bool = False)
@@ -146,6 +162,12 @@ methods directly.
 The plugin treats `next_turn_notification` as a blocking iterator source for one
 turn. It filters notifications by thread id and stops only on the current
 thread's `turn/completed`.
+
+While waiting for blocking turn notifications, the live runtime also drains
+Bub's steering buffer and calls `turn_steer` on the same Codex thread and turn.
+The current contract is intentionally narrow: only textual Bub message content
+is steered. Rich envelope fields stay out of the Codex SDK boundary until a
+concrete consumer requires them.
 
 Notification payloads may be SDK models. `codex_thread_service` is the only
 place that converts them with `model_dump(mode="json", by_alias=True,
