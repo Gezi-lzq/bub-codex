@@ -37,7 +37,7 @@ class FakeMaterializingThreadService:
     resumed: list[str] = field(default_factory=list)
     fail_resume: bool = False
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         thread_id = f"codex-thread-{len(self.created) + 1}"
         self.created.append(thread_id)
         return ThreadMaterialization(thread_id=thread_id)
@@ -179,7 +179,7 @@ class FailingTurnStreamService:
 
 @dataclass(slots=True)
 class FailingMaterializationThreadService:
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         raise RuntimeError("codex materialization failed")
 
     def resume_thread(self, thread_id: str) -> None:

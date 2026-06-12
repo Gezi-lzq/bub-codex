@@ -93,8 +93,8 @@ still handled by Bub.
 - Codex dynamic tool: `bub.tape_handoff`
 
 Both paths create a Bub Anchor when Bub has an active tape store. The next
-normal chat turn materializes a new Codex thread from that Anchor and binds it
-in tape.
+normal chat turn prepares startup context from that Anchor, creates a Codex
+thread, and binds it in tape.
 
 ## Behavior
 
@@ -106,7 +106,7 @@ At runtime, the plugin:
 
 - resolves the Bub workspace and tape id
 - resumes the Codex thread bound to the current Bub Anchor
-- materializes a new Codex thread when no binding exists
+- prepares startup context and binds a new Codex thread when no binding exists
 - writes selected Codex runtime events to Bub tape
 - emits final-answer text to Bub's stream output
 

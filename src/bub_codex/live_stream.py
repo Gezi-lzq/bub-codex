@@ -1,3 +1,10 @@
+"""Bub live stream runtime.
+
+This module owns streaming side effects: consuming Codex turn records, appending
+tape events, and emitting Bub stream events. It relies on `runtime_context.py`
+for thread state decisions and on `runtime_adapter.py` for SDK record decoding.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable

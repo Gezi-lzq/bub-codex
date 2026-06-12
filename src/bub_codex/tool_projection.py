@@ -1,3 +1,9 @@
+"""Tool and side-effect tape projection boundary.
+
+This module maps normalized tool/file side-effect facts into Bub tool lifecycle
+events with stable input/output hashes. It does not execute tools.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Iterable

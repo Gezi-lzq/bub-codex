@@ -33,7 +33,7 @@ class FakeCodexThreadService:
     resumed: list[str] = field(default_factory=list)
     prompts: list[str] = field(default_factory=list)
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         thread_id = f"codex-thread-{len(self.created) + 1}"
         self.created.append(thread_id)
         return ThreadMaterialization(thread_id=thread_id)

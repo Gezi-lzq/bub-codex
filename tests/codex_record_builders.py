@@ -124,6 +124,26 @@ def context_compaction_completed(
     }
 
 
+def error_notification(
+    *,
+    message: str = "codex failed",
+    error_type: str = "RuntimeError",
+    code: str = "internal_error",
+    thread_id: str = "thread-1",
+    turn_id: str = "turn-1",
+) -> dict[str, Any]:
+    return {
+        "method": "error",
+        "payload": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "type": error_type,
+            "message": message,
+            "code": code,
+        },
+    }
+
+
 def _command_execution(
     *,
     method: str,

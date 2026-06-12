@@ -188,16 +188,33 @@ SDK or app-server contract is verified and covered by tests.
 
 ## Runtime State Machine
 
+Terms used by the runtime:
+
+- **Anchor**: Bub-side continuity marker recorded in tape.
+- **Bound Codex thread**: a Codex thread id recorded by `codex.thread.bound` for
+  the latest Anchor.
+- **Startup context**: model-visible JSON text prepared from workspace metadata
+  and optional handoff summary. It is wrapped into the first real user turn
+  only.
+- **First real user turn**: the first Codex `turn_start` caused by a user chat
+  message after a new thread is bound. There is no hidden initialization turn
+  before it.
+- **Materialization**: retained event terminology meaning that startup context
+  was prepared and recorded as tape evidence. It does not mean `thread_start`
+  received that text or that a hidden LLM turn ran.
+
 The state machine is tape-first:
 
 ```text
 no committed Anchor
   -> create session_start Anchor
-  -> materialize Codex thread
+  -> prepare startup context
+  -> create Codex thread
   -> bind thread to Anchor
 
 latest Anchor has no codex.thread.bound
-  -> materialize Codex thread
+  -> prepare startup context
+  -> create Codex thread
   -> bind thread to Anchor
 
 latest Anchor has codex.thread.bound
@@ -207,8 +224,10 @@ latest Anchor has codex.thread.bound
 Resume failure is surfaced as an error. It does not silently create a replacement
 thread.
 
-Materialization prepares `MaterializedContextInput` once. The exact text sent to
-Codex is also the text hashed into `bub.context.materialized.input_sha256`.
+The context-binding path prepares `MaterializedContextInput` once and records
+the startup context hash in `bub.context.materialized.input_sha256`. The Codex
+thread creation call does not receive this text. The runtime wraps it into the
+first real user turn only; resumed turns send the raw user prompt.
 
 `RuntimeStreamService.current_tape_store()` is the plugin-facing port for
 comma-command handoff recording. `LazyRuntimeStreamService` may initialize and

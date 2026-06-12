@@ -1,3 +1,9 @@
+"""Codex notification decoding boundary.
+
+This module converts raw Codex SDK notification records into normalized facts.
+It should not choose Bub tape event shapes or emit user-visible stream output.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable

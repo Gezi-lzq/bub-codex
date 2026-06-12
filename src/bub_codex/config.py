@@ -1,3 +1,9 @@
+"""Bub configuration boundary.
+
+This module declares plugin settings and loads them through Bub. Runtime
+construction belongs in `runtime_services.py`.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

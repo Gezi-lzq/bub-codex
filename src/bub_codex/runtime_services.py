@@ -1,3 +1,10 @@
+"""Runtime dependency assembly boundary.
+
+This module wires Bub configuration, tape storage, Codex SDK client creation,
+and dynamic tools into a live runtime. It should not own turn execution or the
+tape-backed create/resume state machine.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -13,7 +20,7 @@ from .codex_thread_service import MaterializingCodexThreadService
 from .config import BubCodexSettings, load_settings
 from .bub_tools import BubToolRuntimeContext, build_bub_dynamic_tool_provider
 from .republic_tape_store import RepublicTapeStoreAdapter
-from .runtime import BubCodexRuntime
+from .runtime_context import RuntimeContextKernel
 from .stream_utils import stream_text
 from .tape_store import InMemoryTapeStore, TapeStore
 
@@ -196,9 +203,9 @@ def build_runtime_stream_service(
         sandbox=settings.sandbox,
         dynamic_tools=dynamic_tool_provider.specs,
     )
-    runtime = BubCodexRuntime(tape_store, codex_threads)
+    context_kernel = RuntimeContextKernel(tape_store, codex_threads)
     return BubCodexLiveRuntimeStreamService(
-        runtime.context_kernel,
+        context_kernel,
         tape_store,
         codex_threads,
         tool_runtime_context=tool_runtime_context,

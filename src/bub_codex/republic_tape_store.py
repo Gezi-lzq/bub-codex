@@ -1,3 +1,9 @@
+"""Republic tape-store adapter boundary.
+
+This module is the only place that translates between the internal TapeStore
+port and Bub/Republic tape entries, including native Bub Anchor entries.
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,10 @@
+"""Batch/reference turn runtime.
+
+This module runs one complete Codex user turn and appends projected tape events.
+The live Bub streaming path uses `live_stream.py`; shared create/resume
+decisions stay in `runtime_context.py`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -62,7 +69,7 @@ class BubCodexRuntime:
             workspace_metadata=workspace_metadata,
         )
         if start.thread_id is None:
-            raise RuntimeError("cannot run turn without a materialized Codex thread")
+            raise RuntimeError("cannot run turn without a bound Codex thread")
 
         turn = self.codex_threads.run_turn(
             thread_id=start.thread_id,

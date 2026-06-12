@@ -107,7 +107,7 @@ class ContextMaterializationTest(unittest.TestCase):
         self.assertNotIn("input_preview", materialized.payload)
         self.assertNotIn(user_task, json.dumps(materialized.to_json(), ensure_ascii=False))
 
-    def test_materialization_event_hashes_the_same_context_sent_to_codex(self) -> None:
+    def test_materialization_event_hashes_the_startup_context(self) -> None:
         import hashlib
 
         user_task = "continue from the anchor"
@@ -174,7 +174,7 @@ class ContextMaterializationTest(unittest.TestCase):
         self.assertNotIn(anchor.event_id, materialized_input)
         self.assertNotIn("previous_anchor_id", materialized_input)
 
-    def test_runtime_passes_materialized_context_not_user_task_to_thread_service(self) -> None:
+    def test_runtime_prepares_startup_context_without_user_task_text(self) -> None:
         user_task = "implement the actual user request"
         store = InMemoryTapeStore()
         thread_service = CapturingThreadService()
@@ -190,13 +190,12 @@ class ContextMaterializationTest(unittest.TestCase):
         self.assertEqual(result.status, "created_anchor_and_materialized")
         self.assertEqual(result.thread_id, "thread-1")
         self.assertIsNotNone(result.startup_context)
-        self.assertIsNotNone(thread_service.materialized_context)
-        materialized_context = thread_service.materialized_context or ""
-        self.assertEqual(result.startup_context, materialized_context)
-        parsed = json.loads(materialized_context)
+        self.assertEqual(thread_service.materialize_calls, [("/workspace", str(result.anchor_id))])
+        startup_context = result.startup_context or ""
+        parsed = json.loads(startup_context)
         self.assertEqual(parsed, {"workspace_metadata": {"cwd": "/workspace"}})
-        self.assertNotIn(str(result.anchor_id), materialized_context)
-        self.assertNotIn(user_task, materialized_context)
+        self.assertNotIn(str(result.anchor_id), startup_context)
+        self.assertNotIn(user_task, startup_context)
 
     def test_startup_context_wraps_only_first_real_user_prompt(self) -> None:
         prompt = prompt_with_startup_context(
@@ -290,10 +289,10 @@ class ContextMaterializationTest(unittest.TestCase):
 
 class CapturingThreadService:
     def __init__(self) -> None:
-        self.materialized_context: str | None = None
+        self.materialize_calls: list[tuple[str, str]] = []
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
-        self.materialized_context = materialized_context
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
+        self.materialize_calls.append((cwd, anchor_id))
         return ThreadMaterialization(thread_id="thread-1")
 
     def resume_thread(self, thread_id: str) -> None:
@@ -304,7 +303,7 @@ class CapturingThreadService:
 
 
 class FailingThreadService:
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         raise RuntimeError("materialization failed")
 
     def resume_thread(self, thread_id: str) -> None:

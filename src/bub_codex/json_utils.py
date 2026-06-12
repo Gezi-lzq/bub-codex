@@ -1,3 +1,9 @@
+"""Shared JSON, hashing, and preview helpers.
+
+These helpers define deterministic JSON behavior used by event ids, hashes, and
+audit previews. Keep semantic runtime logic out of this module.
+"""
+
 from __future__ import annotations
 
 import hashlib

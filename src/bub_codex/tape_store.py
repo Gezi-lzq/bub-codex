@@ -1,3 +1,9 @@
+"""Internal tape-store port.
+
+This module defines the minimal append/read interface used by the runtime.
+Republic-specific storage behavior belongs in `republic_tape_store.py`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,3 +1,10 @@
+"""Codex app-server parameter and dynamic-tool boundary.
+
+This module owns raw app-server JSON extensions such as `dynamicTools` and the
+server-request dispatcher for dynamic tools/approvals. Thread and turn lifecycle
+calls belong in `codex_thread_service.py`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

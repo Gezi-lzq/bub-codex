@@ -1,3 +1,10 @@
+"""Small Bub stream helpers.
+
+This module contains prompt extraction, default tape id generation, and
+StreamDecision-to-StreamEvent conversion. Runtime state decisions belong
+elsewhere.
+"""
+
 from __future__ import annotations
 
 import hashlib

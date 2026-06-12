@@ -1,3 +1,9 @@
+"""User-turn tape projection boundary.
+
+This module maps normalized Codex facts from one user turn into Bub tape events.
+It delegates specialized tool and compaction facts to their projection modules.
+"""
+
 from __future__ import annotations
 
 from typing import Iterable
@@ -39,6 +45,8 @@ def project_user_turn_events(
                     reason="auto_compact",
                 )
             )
+        elif fact.kind == "codex.error.observed":
+            events.append(_project_codex_error_fact(fact, session_id, tape_id, anchor_id))
         elif fact.kind == "codex.turn.completed":
             events.append(_project_turn_fact(fact, "codex.turn.completed", session_id, tape_id, anchor_id))
     return events
@@ -81,6 +89,30 @@ def _project_turn_fact(
             "purpose": "user_turn",
             "source_fact_id": fact.event_id,
         },
+        occurred_at=fact.occurred_at,
+        session_id=session_id,
+        tape_id=tape_id,
+        anchor_id=anchor_id,
+        thread_id=fact.thread_id,
+        turn_id=fact.turn_id,
+    )
+
+
+def _project_codex_error_fact(
+    fact: CodexFact,
+    session_id: str,
+    tape_id: str,
+    anchor_id: str | None,
+) -> TapeEvent:
+    payload: JsonObject = {
+        "source_fact_id": fact.event_id,
+        "error_type": fact.payload.get("type"),
+        "message": fact.payload.get("message"),
+        "code": fact.payload.get("code"),
+    }
+    return make_tape_event(
+        "codex.error.observed",
+        payload=payload,
         occurred_at=fact.occurred_at,
         session_id=session_id,
         tape_id=tape_id,

@@ -1,3 +1,5 @@
+"""First-turn startup context prompt wrapper."""
+
 from __future__ import annotations
 
 

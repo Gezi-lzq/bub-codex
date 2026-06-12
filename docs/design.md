@@ -43,6 +43,67 @@ Bub run_model_stream
 The plugin starts and initializes the Codex SDK runtime lazily, then reuses it
 while the workspace, tape store, and Codex configuration stay the same.
 
+## Module Boundaries
+
+The package intentionally stays flat under `src/bub_codex/`. The file count is
+accepted because each file owns a concrete side-effect boundary or invariant:
+
+| File | Owns |
+| --- | --- |
+| `plugin.py` | Bub hook surface and comma-command delegation |
+| `runtime_services.py` | dependency assembly and lazy runtime lifecycle |
+| `runtime_context.py` | tape-backed create/resume state machine |
+| `new_thread_materialization.py` | startup context evidence and thread-binding events |
+| `startup_context.py` | first-turn prompt wrapper |
+| `live_stream.py` | Bub streaming side effects |
+| `runtime.py` | batch/reference one-turn runner |
+| `codex_client.py` | Codex app-server params and dynamic-tool request dispatch |
+| `codex_thread_service.py` | Codex thread/turn SDK calls and notification collection |
+| `runtime_adapter.py` | raw SDK notification to `CodexFact` decoding |
+| `turn_translator.py` | live-turn stream state and stream decisions |
+| `turn_projection.py` | user-turn fact to tape-event projection |
+| `tool_projection.py` | tool/file side-effect tape events |
+| `compact_projection.py` | compaction continuity events |
+| `bub_tools.py` | Bub tape tool allowlist and Codex dynamic-tool bridge |
+| `tape_events.py` | internal event shape and deterministic ids |
+| `tape_store.py` | narrow internal tape-store port |
+| `republic_tape_store.py` | Republic tape adapter |
+| `runtime_diagnostics.py` | standardized runtime error events |
+| `stream_utils.py` | stream/prompt/tape-id helpers |
+| `json_utils.py` | canonical JSON, hashing, previews |
+
+Do not add subpackages only to reduce the apparent file count. Add hierarchy
+only when imports or ownership become hard to trace.
+
+## Projection Policy
+
+Notification projection is intentionally not one-to-one:
+
+```text
+Codex SDK notification
+  -> runtime_adapter.CodexFact
+  -> selected TapeEvent
+  -> optional StreamDecision
+```
+
+The adapter may emit multiple facts for one notification, such as completed
+agent messages or compaction items. Projection keeps only events with Bub value:
+auditability, future resume, side-effect inspection, debugging, or final-answer
+reconstruction.
+
+Durable projection rules:
+
+- assistant deltas are stream-only and are not written to tape;
+- completed assistant messages are written to tape;
+- selected tool and file-change items become Bub lifecycle events with hashes
+  and previews;
+- compaction facts become multiple continuity events because they update Bub
+  Anchor/thread state;
+- SDK error notifications are written as `codex.error.observed`;
+- token usage, command output deltas, patch updates, turn diff updates, unknown
+  notifications, and non-tool item lifecycle facts remain filtered until a
+  concrete consumer exists.
+
 ## Session Continuity
 
 Bub and Codex use different identities:
@@ -59,10 +120,11 @@ latest Anchor has a bound Codex thread
   -> resume that Codex thread
 
 latest Anchor has no bound Codex thread
-  -> materialize and bind a new Codex thread
+  -> prepare startup context, create a Codex thread, and bind it
 
 no Anchor exists
-  -> create a bootstrap Anchor, then materialize and bind a Codex thread
+  -> create a bootstrap Anchor
+  -> prepare startup context, create a Codex thread, and bind it
 ```
 
 If a bound Codex thread cannot be resumed, the plugin surfaces the error instead
@@ -74,8 +136,10 @@ The plugin integrates with the Codex Python SDK, not the `codex e` subprocess
 interface. At runtime it creates a Codex client from Bub configuration, starts
 the Codex app-server client, and runs Codex turns through the SDK.
 
-For new sessions, the plugin first performs a short materialization turn so the
-Codex thread has resumable context. User prompts are sent as separate user turns.
+For new sessions, the plugin creates a Codex thread and records the prepared
+startup context in tape. It does not run a hidden initialization model turn.
+The startup context is wrapped into the first real user turn; resumed turns send
+the raw user prompt.
 
 ## Tape Projection
 
@@ -108,5 +172,18 @@ Anchor/thread resolution.
 `tape.handoff` is the context-switching tool. When the user runs
 `,tape.handoff` or Codex calls `bub.tape_handoff` and Bub has an active tape
 store, Bub records a new Anchor. On the next normal chat turn, `bub-codex`
-resolves that latest Anchor, creates a new Codex thread, and writes the new
-`codex.thread.bound` event to tape.
+resolves that latest Anchor, prepares startup context, creates a new Codex
+thread, and writes the new `codex.thread.bound` event to tape.
+
+## Review Rules
+
+Before large changes, check these invariants:
+
+- only `runtime_context.py` decides create-vs-resume state;
+- only `codex_thread_service.py` calls Codex thread/turn methods;
+- projection files consume `CodexFact`, not raw SDK payloads;
+- second and later turns in the same session do not receive startup context;
+- no hidden initialization model turn is introduced;
+- projection remains value-based, not a mirror of Codex SDK notifications;
+- new files must earn their boundary by owning a distinct invariant or side
+  effect.

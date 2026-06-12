@@ -1,3 +1,10 @@
+"""Codex thread and turn SDK boundary.
+
+This module is the only place that should call Codex thread/turn methods. It
+creates/resumes threads, starts real user turns, and converts SDK notifications
+to JSON-like records without adding hidden model turns.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -71,7 +78,7 @@ class MaterializingCodexThreadService:
         self._sandbox = sandbox
         self._dynamic_tools = dynamic_tools
 
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         started = self._client.thread_start(
             ThreadStartOptions(
                 cwd=cwd,

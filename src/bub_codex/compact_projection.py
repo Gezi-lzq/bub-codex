@@ -1,3 +1,10 @@
+"""Codex compaction tape projection boundary.
+
+This module records compaction as a Bub continuity event and binds the compact
+Anchor back to the existing Codex thread. It does not decide normal
+create/resume state.
+"""
+
 from __future__ import annotations
 
 from typing import Iterable

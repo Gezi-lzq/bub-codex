@@ -91,7 +91,6 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         materialization = service.materialize_thread(
             cwd="/workspace",
             anchor_id="anchor-1",
-            materialized_context="context",
         )
 
         self.assertEqual(materialization.thread_id, "thread-1")
@@ -107,7 +106,6 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         service.materialize_thread(
             cwd="/workspace",
             anchor_id="anchor-1",
-            materialized_context="context",
         )
 
         self.assertEqual(client.turn_start_calls, [])

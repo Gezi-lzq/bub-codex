@@ -1,3 +1,9 @@
+"""Runtime diagnostic tape events.
+
+This module standardizes error summaries and `bub.runtime.error` events. It does
+not decide recovery policy.
+"""
+
 from __future__ import annotations
 
 from typing import Any

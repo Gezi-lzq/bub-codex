@@ -1,3 +1,10 @@
+"""Bub tool to Codex dynamic-tool adapter boundary.
+
+This module exposes a small allowlist of Bub tape tools to Codex dynamic tools
+and injects explicit per-turn tool context. It should not own Codex thread
+lifecycle or runtime state transitions.
+"""
+
 from __future__ import annotations
 
 import asyncio

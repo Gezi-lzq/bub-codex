@@ -12,7 +12,12 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from codex_record_builders import agent_message_completed, agent_message_delta, context_compaction_completed  # noqa: E402
+from codex_record_builders import (  # noqa: E402
+    agent_message_completed,
+    agent_message_delta,
+    context_compaction_completed,
+    error_notification,
+)
 from bub_codex.tape_events import make_tape_event  # noqa: E402
 from bub_codex.turn_translator import CodexTurnTranslator, stream_success_decisions_from_tape_events  # noqa: E402
 
@@ -170,6 +175,16 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertEqual(compact_bindings[0].anchor_id, compact_anchors[0].anchor_id)
         self.assertEqual(compact_bindings[0].thread_id, compact_anchors[0].thread_id)
         self.assertNotIn("snapshot_fact_id", compact_bindings[0].payload["refs"])
+
+    def test_sdk_error_notification_is_written_to_tape(self) -> None:
+        translator = _translator()
+
+        result = translator.accept(error_notification(message="model failed", code="bad_request"))
+
+        self.assertEqual([event.type for event in result.tape_events], ["codex.error.observed"])
+        self.assertEqual(result.tape_events[0].payload["message"], "model failed")
+        self.assertEqual(result.tape_events[0].payload["code"], "bad_request")
+        self.assertEqual(result.stream_decisions, ())
 
     def test_success_fallback_uses_event_turn_id_when_no_assistant_text_exists(self) -> None:
         decisions = stream_success_decisions_from_tape_events(

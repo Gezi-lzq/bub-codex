@@ -1,3 +1,10 @@
+"""Startup context and thread-binding event construction.
+
+Materialization here means preparing startup context and recording tape
+evidence. It does not call Codex, and it does not run a hidden initialization
+model turn.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +17,7 @@ from .tape_events import TapeEvent, make_tape_event
 
 @dataclass(frozen=True, slots=True)
 class MaterializedContextInput:
-    """Anchor context selected once and reused for Codex input and tape evidence."""
+    """Anchor context selected once for first-turn startup context and tape evidence."""
 
     anchor: TapeEvent
     selected_refs: tuple[str, ...]
@@ -135,7 +142,7 @@ def materialize_thread_binding_events(
     materialization_turn_id: str | None = None,
     occurred_at: str | None = None,
 ) -> ThreadBindingEvents:
-    """Materialize a Codex thread from a committed Anchor and bind it to tape."""
+    """Record prepared startup context and bind a newly created Codex thread."""
 
     event_list = list(tape_events)
     anchor = materialized_context.anchor
@@ -196,7 +203,7 @@ def materialize_thread_binding_failed_events(
     reason: str = "anchor_materialization",
     occurred_at: str | None = None,
 ) -> ThreadBindFailureEvents:
-    """Record failed thread materialization without invalidating the Anchor."""
+    """Record failed Codex thread creation or binding without invalidating the Anchor."""
 
     anchor = materialized_context.anchor
     materialization_id = _stable_id(
@@ -300,7 +307,7 @@ def prepare_materialized_context(
     event_list = list(tape_events)
     anchor = find_anchor_created(event_list, anchor_id) if anchor_id else latest_anchor_created(event_list)
     if anchor is None:
-        raise ValueError("cannot materialize Codex thread without a committed Anchor")
+        raise ValueError("cannot prepare startup context without a committed Anchor")
 
     selected_refs = select_context_refs(event_list, anchor, recent_event_limit=recent_event_limit)
     return MaterializedContextInput(

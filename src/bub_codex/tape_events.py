@@ -1,3 +1,10 @@
+"""Internal tape event data model.
+
+This module defines the stable event shape and deterministic event ids used by
+the runtime state machine and projection modules. Storage adapters live
+elsewhere.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

@@ -1,3 +1,9 @@
+"""Bub plugin boundary.
+
+This module owns the Bub hook surface and comma-command delegation. It should
+not call Codex SDK methods, decide thread state, or project tape events.
+"""
+
 from __future__ import annotations
 
 import inspect

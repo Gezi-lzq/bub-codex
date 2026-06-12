@@ -1,3 +1,10 @@
+"""Tape-backed runtime state machine.
+
+This module is the only owner of create-anchor, create-thread, bind-thread, and
+resume-thread decisions. It records startup context evidence, but it does not
+run Codex turns or stream model output.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -63,7 +70,7 @@ def resolve_runtime_context(events: list[TapeEvent]) -> RuntimeContextResolution
 
 
 class CodexThreadContextAdapter(Protocol):
-    def materialize_thread(self, *, cwd: str, anchor_id: str, materialized_context: str) -> ThreadMaterialization:
+    def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         ...
 
     def resume_thread(self, thread_id: str) -> None:
@@ -137,7 +144,7 @@ class RuntimeContextKernel:
                 appended_events=start.appended_events,
                 start=start,
             )
-        error = start.error or {"type": "RuntimeError", "message": "cannot run turn without a materialized Codex thread"}
+        error = start.error or {"type": "RuntimeError", "message": "cannot run turn without a bound Codex thread"}
         return ContextUnavailable(
             session_id=session_id,
             tape_id=tape_id,
@@ -253,7 +260,6 @@ class RuntimeContextKernel:
             materialization = self.codex_threads.materialize_thread(
                 cwd=cwd,
                 anchor_id=anchor_id,
-                materialized_context=materialized_context.text,
             )
         except Exception as exc:
             error = runtime_error_summary(exc)
