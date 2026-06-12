@@ -99,7 +99,8 @@ Durable projection rules:
   and previews;
 - compaction facts become multiple continuity events because they update Bub
   Anchor/thread state;
-- SDK error notifications are written as `codex.error.observed`;
+- SDK error notifications are written as `codex.error.observed` with the raw SDK
+  payload preserved;
 - token usage, command output deltas, patch updates, turn diff updates, unknown
   notifications, and non-tool item lifecycle facts remain filtered until a
   concrete consumer exists.

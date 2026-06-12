@@ -109,6 +109,7 @@ def _project_codex_error_fact(
         "error_type": fact.payload.get("type"),
         "message": fact.payload.get("message"),
         "code": fact.payload.get("code"),
+        "raw_error": fact.payload,
     }
     return make_tape_event(
         "codex.error.observed",

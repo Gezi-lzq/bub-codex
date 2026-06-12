@@ -184,6 +184,27 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertEqual([event.type for event in result.tape_events], ["codex.error.observed"])
         self.assertEqual(result.tape_events[0].payload["message"], "model failed")
         self.assertEqual(result.tape_events[0].payload["code"], "bad_request")
+        self.assertEqual(result.tape_events[0].payload["raw_error"]["message"], "model failed")
+        self.assertEqual(result.stream_decisions, ())
+
+    def test_sdk_error_notification_preserves_raw_payload(self) -> None:
+        translator = _translator()
+        raw_payload = {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "error": {
+                "type": "ApiError",
+                "message": "rate limited",
+                "code": "rate_limit",
+                "status": 429,
+            },
+            "requestId": "req-1",
+        }
+
+        result = translator.accept({"method": "error", "payload": raw_payload})
+
+        self.assertEqual([event.type for event in result.tape_events], ["codex.error.observed"])
+        self.assertEqual(result.tape_events[0].payload["raw_error"], raw_payload)
         self.assertEqual(result.stream_decisions, ())
 
     def test_success_fallback_uses_event_turn_id_when_no_assistant_text_exists(self) -> None:
