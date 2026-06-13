@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any
 
 from .json_utils import JsonObject, dict_or_empty, optional_str, preview_json, sha256_json
 from .runtime_adapter import record_event_id, record_item, record_item_id, record_thread_id, record_turn_id
@@ -21,28 +21,6 @@ TOOL_ITEM_TYPES = {
 SIDE_EFFECT_ITEM_TYPES = {
     "fileChange",
 }
-
-
-def project_tool_events(
-    records: Iterable[JsonObject],
-    *,
-    session_id: str,
-    tape_id: str,
-    anchor_id: str | None = None,
-    source: str = "sdk_stream:user_turn",
-) -> list[TapeEvent]:
-    events: list[TapeEvent] = []
-    for record in records:
-        event = project_tool_event(
-            record,
-            session_id=session_id,
-            tape_id=tape_id,
-            anchor_id=anchor_id,
-            source=source,
-        )
-        if event is not None:
-            events.append(event)
-    return events
 
 
 def project_tool_event(

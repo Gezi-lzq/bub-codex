@@ -47,24 +47,15 @@ class ToolContextLike:
 
 
 @dataclass(frozen=True, slots=True)
-class BubDynamicToolProvider:
-    specs: tuple[DynamicToolSpec, ...]
-    dispatcher: DynamicToolDispatcher
-
-
-@dataclass(frozen=True, slots=True)
 class BubDynamicToolBridge:
     """Runtime-facing bundle for Codex dynamic Bub tools."""
 
     runtime_context: "BubToolRuntimeContext"
-    provider: BubDynamicToolProvider
-
-    @property
-    def specs(self) -> tuple[DynamicToolSpec, ...]:
-        return self.provider.specs
+    specs: tuple[DynamicToolSpec, ...]
+    dispatcher: DynamicToolDispatcher
 
     def handle_server_request(self, method: str, params: JsonObject | None) -> JsonObject:
-        return self.provider.dispatcher.handle_server_request(method, params)
+        return self.dispatcher.handle_server_request(method, params)
 
     def bind_event_loop(self, event_loop: asyncio.AbstractEventLoop) -> None:
         self.runtime_context.bind_event_loop(event_loop)
@@ -243,13 +234,13 @@ def make_bub_tool_context(
     return ToolContext(tape=tape_id, run_id=run_id, state=state)
 
 
-def build_bub_dynamic_tool_provider(
+def _build_bub_dynamic_tool_parts(
     tools: Iterable[BubToolLike],
     *,
     namespace: str = BUB_DYNAMIC_TOOL_NAMESPACE,
     context_factory: Callable[[DynamicToolCall], Any] | None = None,
     awaitable_resolver: Callable[[Any], Any] | None = None,
-) -> BubDynamicToolProvider:
+) -> tuple[tuple[DynamicToolSpec, ...], DynamicToolDispatcher]:
     specs: list[DynamicToolSpec] = []
     handlers: dict[tuple[str | None, str], Callable[[DynamicToolCall], DynamicToolResult]] = {}
     seen: dict[str, str] = {}
@@ -278,10 +269,7 @@ def build_bub_dynamic_tool_provider(
             awaitable_resolver=awaitable_resolver,
         )
 
-    return BubDynamicToolProvider(
-        specs=tuple(specs),
-        dispatcher=DynamicToolDispatcher(handlers),
-    )
+    return tuple(specs), DynamicToolDispatcher(handlers)
 
 
 def build_bub_dynamic_tool_bridge(
@@ -290,13 +278,17 @@ def build_bub_dynamic_tool_bridge(
     namespace: str = BUB_DYNAMIC_TOOL_NAMESPACE,
 ) -> BubDynamicToolBridge:
     runtime_context = BubToolRuntimeContext()
-    provider = build_bub_dynamic_tool_provider(
+    specs, dispatcher = _build_bub_dynamic_tool_parts(
         tools,
         namespace=namespace,
         context_factory=runtime_context.context_for_call,
         awaitable_resolver=runtime_context.resolve_awaitable,
     )
-    return BubDynamicToolBridge(runtime_context=runtime_context, provider=provider)
+    return BubDynamicToolBridge(
+        runtime_context=runtime_context,
+        specs=specs,
+        dispatcher=dispatcher,
+    )
 
 
 def _is_executable_tool(tool: BubToolLike) -> bool:

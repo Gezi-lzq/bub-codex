@@ -2,37 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from .json_utils import JsonObject, sha256_text
 from .runtime_adapter import record_event_id, record_thread_id, record_turn_id
 from .tape_events import TapeEvent, make_tape_event
-
-
-def project_compaction_events(
-    records: Iterable[JsonObject],
-    *,
-    session_id: str,
-    tape_id: str,
-    initiator: str = "bub_runtime",
-    reason: str = "user_requested",
-    source: str = "sdk_stream:user_turn",
-) -> list[TapeEvent]:
-    """Project Codex compaction notifications into Anchors bound to the same thread."""
-
-    events: list[TapeEvent] = []
-    for record in records:
-        events.extend(
-            project_compaction_record(
-                record,
-                session_id=session_id,
-                tape_id=tape_id,
-                initiator=initiator,
-                reason=reason,
-                source=source,
-            )
-        )
-    return events
 
 
 def project_compaction_record(

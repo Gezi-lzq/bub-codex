@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
-from .compact_projection import project_compaction_record
 from .json_utils import JsonObject
 from .runtime_adapter import (
     record_event_id,
@@ -15,58 +12,10 @@ from .runtime_adapter import (
     record_turn_id,
 )
 from .tape_events import TapeEvent, make_tape_event
-from .tool_projection import project_tool_event
-
-
-def project_user_turn_events(
-    records: Iterable[JsonObject],
-    *,
-    session_id: str,
-    tape_id: str,
-    anchor_id: str | None,
-    source: str = "sdk_stream:user_turn",
-) -> list[TapeEvent]:
-    """Batch projection helper; live notification routing belongs in notification_translator.py."""
-
-    events: list[TapeEvent] = []
-    for record in records:
-        method = str(record.get("method") or "")
-        if method == "turn/started":
-            events.append(project_turn_lifecycle_record(record, "codex.turn.started", session_id, tape_id, anchor_id, source))
-        elif tool_event := project_tool_event(
-            record,
-            session_id=session_id,
-            tape_id=tape_id,
-            anchor_id=anchor_id,
-            source=source,
-        ):
-            events.append(tool_event)
-        elif is_completed_assistant_message(record):
-            events.append(project_assistant_message_record(record, session_id, tape_id, anchor_id, source))
-        elif _is_completed_context_compaction(record):
-            events.extend(
-                project_compaction_record(
-                    record,
-                    session_id=session_id,
-                    tape_id=tape_id,
-                    initiator="codex_runtime",
-                    reason="auto_compact",
-                    source=source,
-                )
-            )
-        elif method == "error":
-            events.append(project_codex_error_record(record, session_id, tape_id, anchor_id, source))
-        elif method == "turn/completed":
-            events.append(project_turn_lifecycle_record(record, "codex.turn.completed", session_id, tape_id, anchor_id, source))
-    return events
 
 
 def is_completed_assistant_message(record: JsonObject) -> bool:
     return record.get("method") == "item/completed" and record_item(record).get("type") == "agentMessage"
-
-
-def _is_completed_context_compaction(record: JsonObject) -> bool:
-    return record.get("method") == "item/completed" and record_item(record).get("type") == "contextCompaction"
 
 
 def project_assistant_message_record(

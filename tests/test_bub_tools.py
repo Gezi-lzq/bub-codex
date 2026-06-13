@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from bub_codex.bub_tools import BubToolRuntimeContext, build_bub_dynamic_tool_provider  # noqa: E402
+from bub_codex.bub_tools import build_bub_dynamic_tool_bridge  # noqa: E402
 
 
 class BubDynamicToolsTest(unittest.TestCase):
@@ -31,15 +31,15 @@ class BubDynamicToolsTest(unittest.TestCase):
             handler=handler,
             context=True,
         )
-        runtime_context = BubToolRuntimeContext()
-        runtime_context.update(
+        bridge = build_bub_dynamic_tool_bridge([tool])
+        bridge.update(
             session_id="s1",
             tape_id="tape-1",
             cwd="/workspace",
             anchor_id="anchor-1",
             state={"_runtime_agent": "agent"},
         )
-        runtime_context.register_turn_context(
+        bridge.register_turn_context(
             thread_id="thread-1",
             turn_id="turn-1",
             session_id="s1",
@@ -48,9 +48,8 @@ class BubDynamicToolsTest(unittest.TestCase):
             anchor_id="anchor-1",
             state={"_runtime_agent": "agent"},
         )
-        provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
 
-        result = provider.dispatcher.handle_server_request(
+        result = bridge.handle_server_request(
             "item/tool/call",
             {
                 "callId": "call-1",
@@ -82,10 +81,10 @@ class BubDynamicToolsTest(unittest.TestCase):
                 handler=handler,
                 context=True,
             )
-            runtime_context = BubToolRuntimeContext()
-            runtime_context.bind_event_loop(loop)
-            runtime_context.update(session_id="s1", tape_id="tape-1", cwd="/workspace", anchor_id="anchor-1")
-            runtime_context.register_turn_context(
+            bridge = build_bub_dynamic_tool_bridge([tool])
+            bridge.bind_event_loop(loop)
+            bridge.update(session_id="s1", tape_id="tape-1", cwd="/workspace", anchor_id="anchor-1")
+            bridge.register_turn_context(
                 thread_id="thread-1",
                 turn_id="turn-1",
                 session_id="s1",
@@ -93,14 +92,9 @@ class BubDynamicToolsTest(unittest.TestCase):
                 cwd="/workspace",
                 anchor_id="anchor-1",
             )
-            provider = build_bub_dynamic_tool_provider(
-                [tool],
-                context_factory=runtime_context.context_for_call,
-                awaitable_resolver=runtime_context.resolve_awaitable,
-            )
 
             result = await asyncio.to_thread(
-                provider.dispatcher.handle_server_request,
+                bridge.handle_server_request,
                 "item/tool/call",
                 {
                     "callId": "call-1",
@@ -133,8 +127,8 @@ class BubDynamicToolsTest(unittest.TestCase):
             handler=handler,
             context=True,
         )
-        runtime_context = BubToolRuntimeContext()
-        runtime_context.register_turn_context(
+        bridge = build_bub_dynamic_tool_bridge([tool])
+        bridge.register_turn_context(
             thread_id="thread-1",
             turn_id="turn-1",
             session_id="s1",
@@ -142,7 +136,7 @@ class BubDynamicToolsTest(unittest.TestCase):
             cwd="/workspace/one",
             anchor_id="anchor-1",
         )
-        runtime_context.register_turn_context(
+        bridge.register_turn_context(
             thread_id="thread-2",
             turn_id="turn-2",
             session_id="s2",
@@ -150,9 +144,8 @@ class BubDynamicToolsTest(unittest.TestCase):
             cwd="/workspace/two",
             anchor_id="anchor-2",
         )
-        provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
 
-        result = provider.dispatcher.handle_server_request(
+        result = bridge.handle_server_request(
             "item/tool/call",
             {
                 "callId": "call-1",
@@ -169,9 +162,9 @@ class BubDynamicToolsTest(unittest.TestCase):
 
     def test_dynamic_tool_provider_accepts_run_only_bub_tools(self) -> None:
         tool = RunOnlyTool()
-        provider = build_bub_dynamic_tool_provider([tool])
+        bridge = build_bub_dynamic_tool_bridge([tool])
 
-        result = provider.dispatcher.handle_server_request(
+        result = bridge.handle_server_request(
             "item/tool/call",
             {
                 "callId": "call-1",
@@ -192,10 +185,9 @@ class BubDynamicToolsTest(unittest.TestCase):
             handler=lambda *, context: "not reached",
             context=True,
         )
-        runtime_context = BubToolRuntimeContext()
-        provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
+        bridge = build_bub_dynamic_tool_bridge([tool])
 
-        result = provider.dispatcher.handle_server_request(
+        result = bridge.handle_server_request(
             "item/tool/call",
             {
                 "callId": "call-1",
