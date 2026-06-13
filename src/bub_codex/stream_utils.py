@@ -1,8 +1,7 @@
 """Small Bub stream helpers.
 
 This module contains prompt extraction, default tape id generation, and
-StreamDecision-to-StreamEvent conversion. Runtime state decisions belong
-elsewhere.
+basic StreamEvent construction. Runtime state decisions belong elsewhere.
 """
 
 from __future__ import annotations
@@ -14,8 +13,6 @@ from typing import Any
 from republic import AsyncStreamEvents, StreamEvent, StreamState
 
 from bub.types import State
-
-from .turn_translator import StreamDecision
 
 
 def stream_text(
@@ -50,7 +47,3 @@ def prompt_text(prompt: str | list[dict]) -> str:
     if isinstance(prompt, str):
         return prompt
     return "\n".join(str(part.get("text", "")) for part in prompt if isinstance(part, dict) and part.get("type") == "text")
-
-
-def to_stream_event(decision: StreamDecision) -> StreamEvent:
-    return StreamEvent(decision.kind, decision.data)

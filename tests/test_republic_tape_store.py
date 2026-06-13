@@ -14,7 +14,7 @@ if str(SRC) not in sys.path:
 from republic import TapeEntry  # noqa: E402
 from bub.builtin.store import FileTapeStore  # noqa: E402
 from bub_codex.republic_tape_store import RepublicTapeStoreAdapter  # noqa: E402
-from bub_codex.runtime_context import resolve_runtime_context  # noqa: E402
+from bub_codex.runtime_context import resolve_codex_thread_binding, resolve_runtime_context  # noqa: E402
 from bub_codex.tape_events import make_tape_event  # noqa: E402
 
 try:
@@ -49,7 +49,7 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
             reloaded = RepublicTapeStoreAdapter(FileTapeStore(store_dir))
 
             events = asyncio.run(reloaded.events(session_id="session", tape_id=tape_id))
-            resolution = resolve_runtime_context(events)
+            resolution = resolve_codex_thread_binding(events)
 
         self.assertEqual([event.type for event in events], ["bub.anchor.created", "codex.thread.bound"])
         self.assertEqual(resolution.action, "resume_thread")
@@ -169,7 +169,7 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
 
             reloaded = RepublicTapeStoreAdapter(FileTapeStore(store_dir))
             events = asyncio.run(reloaded.events(session_id="session", tape_id=tape_id))
-            resolution = resolve_runtime_context(events)
+            resolution = resolve_codex_thread_binding(events)
 
         self.assertEqual([event.type for event in events], ["bub.anchor.created", "codex.thread.bound", "bub.anchor.created"])
         self.assertEqual(events[-1].payload["method"], "bub_handoff")
@@ -177,6 +177,20 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
         self.assertEqual(resolution.action, "materialize_thread")
         self.assertEqual(resolution.anchor_id, events[-1].anchor_id)
         self.assertIsNone(resolution.thread_id)
+
+    def test_legacy_runtime_context_resolver_aliases_thread_binding_resolution(self) -> None:
+        anchor = make_tape_event(
+            "bub.anchor.created",
+            payload={"anchor_id": "anchor-1", "method": "new_thread"},
+            session_id="session",
+            tape_id="session__codex",
+            anchor_id="anchor-1",
+        )
+
+        resolution = resolve_runtime_context([anchor])
+
+        self.assertEqual(resolution.action, "materialize_thread")
+        self.assertEqual(resolution.anchor_id, "anchor-1")
 
     def test_async_tape_store_round_trips_inside_running_event_loop(self) -> None:
         async def run():

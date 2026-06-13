@@ -8,10 +8,10 @@ from republic import AsyncStreamEvents, StreamState
 from bub_codex.json_utils import JsonObject, dict_or_empty
 from bub_codex.runtime import BubCodexRuntime
 from bub_codex.runtime_services import RuntimeStreamService
-from bub_codex.stream_utils import default_tape_id, prompt_text, stream_text, to_stream_event
+from bub_codex.stream_utils import default_tape_id, prompt_text, stream_text
 from bub_codex.tape_events import TapeEvent
 from bub_codex.tape_store import TapeStore
-from bub_codex.turn_translator import stream_success_decisions_from_tape_events
+from bub_codex.notification_translator import stream_success_events_from_tape_events
 
 
 class BatchRuntimeStreamService:
@@ -46,11 +46,11 @@ class BatchRuntimeStreamService:
                 error={"kind": "unknown", "message": str(exc)},
             )
 
-        decisions = stream_success_decisions_from_tape_events(result.appended_events)
+        stream_events = stream_success_events_from_tape_events(result.appended_events)
 
         async def iterator():
-            for decision in decisions:
-                yield to_stream_event(decision)
+            for stream_event in stream_events:
+                yield stream_event
 
         return AsyncStreamEvents(iterator(), state=StreamState())
 

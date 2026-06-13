@@ -78,11 +78,14 @@ async def _run_comma_command(
             },
         )
 
-    result = agent.run(session_id=session_id, prompt=prompt, state=state)
-    if inspect.isawaitable(result):
-        result = await result
-    await _record_handoff_anchor(prompt, session_id=session_id, state=state, runtime=runtime)
-    return stream_text(str(result))
+    try:
+        result = agent.run(session_id=session_id, prompt=prompt, state=state)
+        if inspect.isawaitable(result):
+            result = await result
+        await _record_handoff_anchor(prompt, session_id=session_id, state=state, runtime=runtime)
+        return stream_text(str(result))
+    finally:
+        await _close_current_tape_store(runtime)
 
 
 def _is_comma_command(prompt: str | list[dict]) -> bool:
@@ -123,6 +126,18 @@ async def _record_handoff_anchor(prompt: str | list[dict], *, session_id: str, s
         initiator="bub_builtin_command",
     )
     await tape_store.append_many((anchor_creation.started, anchor_creation.created))
+
+
+async def _close_current_tape_store(runtime: RuntimeStreamService) -> None:
+    tape_store = runtime.current_tape_store()
+    if tape_store is None:
+        return
+    close = getattr(tape_store, "close", None)
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 def _parse_comma_command(prompt: str) -> CommaCommand | None:

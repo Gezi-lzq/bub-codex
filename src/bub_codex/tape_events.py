@@ -14,7 +14,7 @@ from .json_utils import JsonObject, canonical_json, sha256_text
 
 @dataclass(frozen=True, slots=True)
 class TapeEvent:
-    """Minimal Bub tape-like event projected from normalized adapter facts."""
+    """Minimal Bub tape-like event projected from decoded Codex notifications."""
 
     type: str
     event_id: str

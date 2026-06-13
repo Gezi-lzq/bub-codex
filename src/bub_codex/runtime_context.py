@@ -7,7 +7,7 @@ run Codex turns or stream model output.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeAlias
 
 from .codex_thread_service import ThreadMaterialization
@@ -35,38 +35,53 @@ RuntimeStartStatus = Literal[
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeContextResolution:
+class CodexThreadBindingResolution:
     action: RuntimeAction
     anchor_id: str | None
     thread_id: str | None
     reason: str
 
 
-def resolve_runtime_context(events: list[TapeEvent]) -> RuntimeContextResolution:
-    anchor = latest_anchor_created(events)
-    if anchor is None:
-        return RuntimeContextResolution(
-            action="create_anchor",
-            anchor_id=None,
-            thread_id=None,
-            reason="no_committed_anchor",
-        )
+@dataclass(frozen=True, slots=True)
+class CodexThreadBindingResolver:
+    """Resolve Bub tape continuity into a Codex thread-binding action."""
 
-    thread_id = active_thread_id_for_anchor(events, anchor.anchor_id)
-    if thread_id is None:
-        return RuntimeContextResolution(
-            action="materialize_thread",
+    def resolve(self, events: list[TapeEvent]) -> CodexThreadBindingResolution:
+        anchor = latest_anchor_created(events)
+        if anchor is None:
+            return CodexThreadBindingResolution(
+                action="create_anchor",
+                anchor_id=None,
+                thread_id=None,
+                reason="no_committed_anchor",
+            )
+
+        thread_id = active_thread_id_for_anchor(events, anchor.anchor_id)
+        if thread_id is None:
+            return CodexThreadBindingResolution(
+                action="materialize_thread",
+                anchor_id=anchor.anchor_id,
+                thread_id=None,
+                reason="latest_anchor_has_no_thread_binding",
+            )
+
+        return CodexThreadBindingResolution(
+            action="resume_thread",
             anchor_id=anchor.anchor_id,
-            thread_id=None,
-            reason="latest_anchor_has_no_thread_binding",
+            thread_id=thread_id,
+            reason="latest_anchor_has_thread_binding",
         )
 
-    return RuntimeContextResolution(
-        action="resume_thread",
-        anchor_id=anchor.anchor_id,
-        thread_id=thread_id,
-        reason="latest_anchor_has_thread_binding",
-    )
+
+def resolve_codex_thread_binding(events: list[TapeEvent]) -> CodexThreadBindingResolution:
+    return CodexThreadBindingResolver().resolve(events)
+
+
+RuntimeContextResolution = CodexThreadBindingResolution
+
+
+def resolve_runtime_context(events: list[TapeEvent]) -> CodexThreadBindingResolution:
+    return resolve_codex_thread_binding(events)
 
 
 class CodexThreadContextAdapter(Protocol):
@@ -80,7 +95,7 @@ class CodexThreadContextAdapter(Protocol):
 @dataclass(frozen=True, slots=True)
 class RuntimeStartResult:
     status: RuntimeStartStatus
-    resolution: RuntimeContextResolution
+    resolution: CodexThreadBindingResolution
     anchor_id: str | None
     thread_id: str | None
     appended_events: tuple[TapeEvent, ...]
@@ -117,6 +132,7 @@ RuntimeContext: TypeAlias = ExecutableContext | ContextUnavailable
 class RuntimeContextKernel:
     tape_store: TapeStore
     codex_threads: CodexThreadContextAdapter
+    thread_binding_resolver: CodexThreadBindingResolver = field(default_factory=CodexThreadBindingResolver)
 
     async def ensure_executable_context(
         self,
@@ -165,7 +181,7 @@ class RuntimeContextKernel:
         workspace_metadata: JsonObject | None = None,
     ) -> RuntimeStartResult:
         events = await self.tape_store.events(session_id=session_id, tape_id=tape_id)
-        resolution = resolve_runtime_context(events)
+        resolution = self.thread_binding_resolver.resolve(events)
 
         if resolution.action == "resume_thread":
             thread_id = resolution.thread_id
@@ -234,7 +250,7 @@ class RuntimeContextKernel:
         self,
         *,
         base_events: list[TapeEvent],
-        resolution: RuntimeContextResolution,
+        resolution: CodexThreadBindingResolution,
         session_id: str,
         tape_id: str,
         cwd: str,

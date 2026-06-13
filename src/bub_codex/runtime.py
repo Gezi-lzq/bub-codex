@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from .codex_thread_service import CodexTurn
-from .runtime_adapter import facts_from_notification_records
 from .runtime_context import (
     CodexThreadContextAdapter,
     ContextUnavailable,
@@ -76,13 +75,8 @@ class BubCodexRuntime:
             cwd=cwd,
             prompt=prompt_with_startup_context(prompt=prompt, startup_context=start.startup_context),
         )
-        facts = facts_from_notification_records(
-            turn.notification_records,
-            source="sdk_stream:user_turn",
-            turn_id=turn.turn_id,
-        )
         turn_events = project_user_turn_events(
-            facts,
+            (_record_with_turn_id(record, turn.turn_id) for record in turn.notification_records),
             session_id=session_id,
             tape_id=tape_id,
             anchor_id=start.anchor_id,
@@ -104,3 +98,9 @@ __all__ = [
     "RuntimeStartResult",
     "RuntimeTurnResult",
 ]
+
+
+def _record_with_turn_id(record: JsonObject, turn_id: str | None) -> JsonObject:
+    if turn_id is None or record.get("turn_id") is not None:
+        return record
+    return {**record, "turn_id": turn_id}

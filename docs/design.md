@@ -59,9 +59,9 @@ accepted because each file owns a concrete side-effect boundary or invariant:
 | `runtime.py` | batch/reference one-turn runner |
 | `codex_client.py` | Codex app-server params and dynamic-tool request dispatch |
 | `codex_thread_service.py` | Codex thread/turn SDK calls and notification collection |
-| `runtime_adapter.py` | raw SDK notification to `CodexFact` decoding |
-| `turn_translator.py` | live-turn stream state and stream decisions |
-| `turn_projection.py` | user-turn fact to tape-event projection |
+| `runtime_adapter.py` | private raw SDK notification record helpers |
+| `notification_translator.py` | Codex notification records to `TapeEvent` and `StreamEvent` translation |
+| `turn_projection.py` | user-turn notification to tape-event projection |
 | `tool_projection.py` | tool/file side-effect tape events |
 | `compact_projection.py` | compaction continuity events |
 | `bub_tools.py` | configured Bub tool allowlist and Codex dynamic-tool bridge |
@@ -75,21 +75,22 @@ accepted because each file owns a concrete side-effect boundary or invariant:
 Do not add subpackages only to reduce the apparent file count. Add hierarchy
 only when imports or ownership become hard to trace.
 
-## Projection Policy
+## Notification Mapping
 
 Notification projection is intentionally not one-to-one:
 
 ```text
 Codex SDK notification
-  -> runtime_adapter.CodexFact
-  -> selected TapeEvent
-  -> optional StreamDecision
+  -> NotificationTranslation
+     -> selected TapeEvent
+     -> optional StreamEvent
 ```
 
-The adapter may emit multiple facts for one notification, such as completed
-agent messages or compaction items. Projection keeps only events with Bub value:
-auditability, future resume, side-effect inspection, debugging, or final-answer
-reconstruction.
+The translator maps JSON-like Codex notification records directly to Bub output.
+Projection helpers may inspect one record in multiple ways, such as item
+lifecycle, assistant-message completion, or compaction continuity, but they do
+not create a public intermediate notification model. The public boundary remains
+`CodexNotification -> TapeEvent / StreamEvent`.
 
 Durable projection rules:
 
@@ -97,22 +98,22 @@ Durable projection rules:
 - completed assistant messages are written to tape;
 - selected tool and file-change items become Bub lifecycle events with hashes
   and previews;
-- compaction facts become multiple continuity events because they update Bub
+- compaction notifications become multiple continuity events because they update Bub
   Anchor/thread state;
 - SDK error notifications are written as `codex.error.observed` with the raw SDK
   payload preserved;
 - token usage, command output deltas, patch updates, turn diff updates, unknown
-  notifications, and non-tool item lifecycle facts remain filtered until a
+  notifications, and non-tool item lifecycle updates remain filtered until a
   concrete consumer exists.
 
-`TapeEvent.type` is the internal bub-codex fact name. The Republic adapter still
+`TapeEvent.type` is the internal bub-codex event name. The Republic adapter still
 uses native `TapeEntry.kind` when the semantics match:
 
 - `bub.anchor.created` -> `anchor`;
 - completed assistant messages -> `message`;
-- runtime and SDK errors -> `error`;
-- tool started/completed facts -> `tool_call` / `tool_result`;
-- lifecycle, binding, and audit facts stay `event`.
+- runtime errors and SDK error observations -> tape `error`;
+- tool started/completed events -> `tool_call` / `tool_result`;
+- lifecycle, binding, and audit events stay `event`.
 
 Every bub-codex entry carries the full `TapeEvent` in metadata so the runtime can
 read back old and new storage shapes without losing state.
@@ -211,7 +212,9 @@ Before large changes, check these invariants:
 - only `runtime_context.py` decides create-vs-resume state;
 - only `codex_thread_service.py` calls Codex thread/turn methods;
 - all Bub/Republic tape I/O is awaited through the internal `TapeStore` port;
-- projection files consume `CodexFact`, not raw SDK payloads;
+- `notification_translator.py` consumes JSON-like notification records and emits Bub `TapeEvent`
+  plus Republic `StreamEvent` objects;
+- projection files consume JSON-like notification records through helper functions, not raw SDK model payloads;
 - second and later turns in the same session do not receive startup context;
 - no hidden initialization model turn is introduced;
 - steering input targets the active Codex turn and does not create a new turn;

@@ -1,32 +1,31 @@
+"""Codex notification to Bub output translation.
+
+This module owns the lossy mapping from Codex notification records to Bub tape
+events and Republic stream events. It does not append tape, yield streams,
+control Codex turns, or execute Bub tools.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+
+from republic import StreamEvent
 
 from .json_utils import JsonObject
-from .runtime_adapter import facts_from_notification_record
+from .runtime_adapter import record_item_id, record_payload
 from .tape_events import TapeEvent
 from .turn_projection import project_user_turn_events
 
 
-StreamDecisionKind = Literal["text", "final", "error"]
-
-
 @dataclass(frozen=True, slots=True)
-class StreamDecision:
-    kind: StreamDecisionKind
-    data: JsonObject
-
-
-@dataclass(frozen=True, slots=True)
-class TranslationResult:
+class NotificationTranslation:
     tape_events: tuple[TapeEvent, ...]
-    stream_decisions: tuple[StreamDecision, ...] = ()
+    stream_events: tuple[StreamEvent, ...] = ()
 
 
 @dataclass(slots=True)
-class CodexTurnTranslator:
+class BubCodexNotificationTranslator:
     session_id: str
     tape_id: str
     anchor_id: str | None
@@ -35,45 +34,47 @@ class CodexTurnTranslator:
     _fallback_text: str | None = None
     _streamed_final_delta_item_ids: set[str] = field(default_factory=set)
 
-    def accept(self, record: JsonObject) -> TranslationResult:
-        facts = facts_from_notification_record(record, source=self.source)
-        stream_decisions: list[StreamDecision] = []
-        for fact in facts:
-            if fact.kind != "codex.assistant_message.delta":
-                continue
-            delta = fact.payload.get("delta")
+    def translate(self, record: JsonObject) -> NotificationTranslation:
+        stream_events: list[StreamEvent] = []
+        if record.get("method") == "item/agentMessage/delta":
+            payload = record_payload(record)
+            delta = payload.get("delta")
             if not isinstance(delta, str) or not delta:
-                continue
-            if fact.payload.get("phase") == "final_answer":
-                if fact.item_id:
-                    self._streamed_final_delta_item_ids.add(fact.item_id)
-                stream_decisions.append(StreamDecision("text", {"delta": delta}))
+                return NotificationTranslation(tape_events=(), stream_events=())
+            if payload.get("phase") == "final_answer":
+                item_id = record_item_id(record)
+                if item_id:
+                    self._streamed_final_delta_item_ids.add(item_id)
+                stream_events.append(StreamEvent("text", {"delta": delta}))
+            return NotificationTranslation(tape_events=(), stream_events=tuple(stream_events))
+
         tape_events = project_user_turn_events(
-            [fact for fact in facts if fact.kind != "codex.assistant_message.delta"],
+            [record],
             session_id=self.session_id,
             tape_id=self.tape_id,
             anchor_id=self.anchor_id,
+            source=self.source,
         )
-        stream_decisions.extend(self._stream_decisions_for(tape_events))
-        return TranslationResult(
+        stream_events.extend(self._stream_events_for(tape_events))
+        return NotificationTranslation(
             tape_events=tuple(tape_events),
-            stream_decisions=tuple(stream_decisions),
+            stream_events=tuple(stream_events),
         )
 
-    def finish(self) -> TranslationResult:
+    def finish(self) -> NotificationTranslation:
         text = "\n".join(self._final_texts) if self._final_texts else self._fallback_text or ""
-        decisions: tuple[StreamDecision, ...]
+        events: tuple[StreamEvent, ...]
         if text and not self._final_texts:
-            decisions = (
-                StreamDecision("text", {"delta": text}),
-                StreamDecision("final", {"text": text, "ok": True}),
+            events = (
+                StreamEvent("text", {"delta": text}),
+                StreamEvent("final", {"text": text, "ok": True}),
             )
         else:
-            decisions = (StreamDecision("final", {"text": text, "ok": True}),)
-        return TranslationResult(tape_events=(), stream_decisions=decisions)
+            events = (StreamEvent("final", {"text": text, "ok": True}),)
+        return NotificationTranslation(tape_events=(), stream_events=events)
 
-    def _stream_decisions_for(self, events: list[TapeEvent]) -> list[StreamDecision]:
-        decisions: list[StreamDecision] = []
+    def _stream_events_for(self, events: list[TapeEvent]) -> list[StreamEvent]:
+        stream_events: list[StreamEvent] = []
         for event in events:
             if event.type != "codex.assistant_message.completed":
                 continue
@@ -85,11 +86,11 @@ class CodexTurnTranslator:
                 self._final_texts.append(text)
                 source_item_id = event.payload.get("source_item_id")
                 if not isinstance(source_item_id, str) or source_item_id not in self._streamed_final_delta_item_ids:
-                    decisions.append(StreamDecision("text", {"delta": text}))
-        return decisions
+                    stream_events.append(StreamEvent("text", {"delta": text}))
+        return stream_events
 
 
-def stream_success_decisions_from_tape_events(events: Iterable[TapeEvent]) -> tuple[StreamDecision, ...]:
+def stream_success_events_from_tape_events(events: Iterable[TapeEvent]) -> tuple[StreamEvent, ...]:
     event_list = list(events)
     final_texts: list[str] = []
     fallback_text = ""
@@ -108,17 +109,17 @@ def stream_success_decisions_from_tape_events(events: Iterable[TapeEvent]) -> tu
         turn_id = _last_turn_id(event_list)
         text = f"codex turn completed: {turn_id}" if turn_id else "codex turn completed"
     return (
-        StreamDecision("text", {"delta": text}),
-        StreamDecision("final", {"text": text, "ok": True}),
+        StreamEvent("text", {"delta": text}),
+        StreamEvent("final", {"text": text, "ok": True}),
     )
 
 
-def stream_error_decisions(exc: Exception) -> tuple[StreamDecision, ...]:
+def stream_error_events(exc: Exception) -> tuple[StreamEvent, ...]:
     text = f"{type(exc).__name__}: {exc}"
     return (
-        StreamDecision("error", {"kind": "unknown", "message": str(exc)}),
-        StreamDecision("text", {"delta": text}),
-        StreamDecision("final", {"text": text, "ok": False}),
+        StreamEvent("error", {"kind": "unknown", "message": str(exc)}),
+        StreamEvent("text", {"delta": text}),
+        StreamEvent("final", {"text": text, "ok": False}),
     )
 
 

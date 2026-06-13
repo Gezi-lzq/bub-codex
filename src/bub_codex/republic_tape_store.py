@@ -6,6 +6,7 @@ port and Bub/Republic tape entries, including native Bub Anchor entries.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -44,6 +45,14 @@ class RepublicTapeStoreAdapter:
             for event in await self._read_tape_events(tape_id)
             if session_id is None or event.session_id in (session_id, None)
         ]
+
+    async def close(self) -> None:
+        close = getattr(self.store, "close", None)
+        if not callable(close):
+            return
+        result = close()
+        if inspect.isawaitable(result):
+            await result
 
     async def _append_one(self, event: TapeEvent) -> None:
         entry = _entry_for_event(event)

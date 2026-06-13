@@ -1,42 +1,45 @@
-"""Codex compaction tape projection boundary.
-
-This module records compaction as a Bub continuity event and binds the compact
-Anchor back to the existing Codex thread. It does not decide normal
-create/resume state.
-"""
+"""Codex compaction notification to tape-event mapping."""
 
 from __future__ import annotations
 
 from typing import Iterable
 
-from .json_utils import sha256_text
-from .runtime_adapter import CodexFact
+from .json_utils import JsonObject, sha256_text
+from .runtime_adapter import record_event_id, record_thread_id, record_turn_id
 from .tape_events import TapeEvent, make_tape_event
 
 
 def project_compaction_events(
-    facts: Iterable[CodexFact],
+    records: Iterable[JsonObject],
     *,
     session_id: str,
     tape_id: str,
     initiator: str = "bub_runtime",
     reason: str = "user_requested",
+    source: str = "sdk_stream:user_turn",
 ) -> list[TapeEvent]:
-    """Project Codex compaction facts into a new Anchor bound to the same thread."""
+    """Project Codex compaction notifications into a new Anchor bound to the same thread."""
 
     events: list[TapeEvent] = []
-    for fact in facts:
-        if fact.kind != "codex.thread.compacted":
+    for record in records:
+        if record.get("method") != "item/completed":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "contextCompaction":
             continue
 
-        anchor_creation_id = _stable_id("anchor_creation", fact.event_id)
-        anchor_id = _stable_id("anchor", fact.event_id)
+        source_id = record_event_id(record, kind="codex.thread.compacted", source=source)
+        anchor_creation_id = _stable_id("anchor_creation", source_id)
+        anchor_id = _stable_id("anchor", source_id)
         common = {
             "session_id": session_id,
             "tape_id": tape_id,
-            "thread_id": fact.thread_id,
-            "turn_id": fact.turn_id,
-            "occurred_at": fact.occurred_at,
+            "thread_id": record_thread_id(record),
+            "turn_id": record_turn_id(record),
+            "occurred_at": str(record.get("ts")) if record.get("ts") is not None else None,
         }
 
         events.append(
@@ -47,8 +50,8 @@ def project_compaction_events(
                     "method": "compact",
                     "initiator": initiator,
                     "reason": reason,
-                    "active_thread_id_before": fact.thread_id,
-                    "source_fact_id": fact.event_id,
+                    "active_thread_id_before": record_thread_id(record),
+                    "source_fact_id": source_id,
                 },
                 **common,
             )
@@ -60,7 +63,7 @@ def project_compaction_events(
                 payload={
                     "anchor_creation_id": anchor_creation_id,
                     "trigger": _compact_trigger(initiator, reason),
-                    "source_fact_id": fact.event_id,
+                    "source_fact_id": source_id,
                 },
                 **common,
             )
@@ -73,16 +76,16 @@ def project_compaction_events(
                     "anchor_id": anchor_id,
                     "method": "compact",
                     "reason": reason,
-                    "created_at": fact.occurred_at,
+                    "created_at": common["occurred_at"],
                     "state": {
                         "summary": None,
                         "summary_status": "unavailable",
                     },
                     "refs": {
                         "source_anchor_creation_id": anchor_creation_id,
-                        "thread_id": fact.thread_id,
-                        "turn_id": fact.turn_id,
-                        "source_fact_id": fact.event_id,
+                        "thread_id": record_thread_id(record),
+                        "turn_id": record_turn_id(record),
+                        "source_fact_id": source_id,
                     },
                     "initiator": initiator,
                 },
@@ -95,12 +98,12 @@ def project_compaction_events(
                 session_id=session_id,
                 tape_id=tape_id,
                 anchor_id=anchor_id,
-                thread_id=fact.thread_id,
-                previous_thread_id=fact.thread_id,
+                thread_id=record_thread_id(record),
+                previous_thread_id=record_thread_id(record),
                 anchor_creation_id=anchor_creation_id,
-                source_fact_id=fact.event_id,
-                turn_id=fact.turn_id,
-                occurred_at=fact.occurred_at,
+                source_fact_id=source_id,
+                turn_id=record_turn_id(record),
+                occurred_at=common["occurred_at"],
             )
         )
 

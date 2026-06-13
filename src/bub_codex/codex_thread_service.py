@@ -73,7 +73,7 @@ class CodexTurnSession:
         self.client.unregister_turn_notifications(self.turn_id)
 
 
-class MaterializingCodexThreadService:
+class CodexManager:
     """Create and resume Codex threads without adding hidden model turns."""
 
     def __init__(
@@ -144,6 +144,9 @@ class MaterializingCodexThreadService:
             turn_id=str(turn.turn.id),
             thread_id=thread_id,
         )
+
+
+MaterializingCodexThreadService = CodexManager
 
 
 def _collect_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str) -> tuple[JsonObject, ...]:

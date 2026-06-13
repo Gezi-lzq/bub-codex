@@ -2,17 +2,19 @@
 
 This module owns streaming side effects: consuming Codex turn records, appending
 tape events, and emitting Bub stream events. It relies on `runtime_context.py`
-for thread state decisions and on `runtime_adapter.py` for SDK record decoding.
+for thread state decisions and on `notification_translator.py` for notification
+mapping.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from republic import AsyncStreamEvents, StreamState
+from republic import AsyncStreamEvents, StreamEvent, StreamState
 
 from bub.envelope import content_of
 from bub.types import State
@@ -21,10 +23,10 @@ from .runtime_adapter import record_belongs_to_thread
 from .runtime_context import ContextUnavailable, ExecutableContext, RuntimeContextKernel
 from .runtime_diagnostics import runtime_error_event
 from .startup_context import prompt_with_startup_context
-from .stream_utils import default_tape_id, prompt_text as extract_prompt_text, to_stream_event
+from .stream_utils import default_tape_id, prompt_text as extract_prompt_text
 from .json_utils import JsonObject
 from .tape_store import TapeStore
-from .turn_translator import CodexTurnTranslator, StreamDecision, stream_error_decisions
+from .notification_translator import BubCodexNotificationTranslator, stream_error_events
 
 
 STEERING_POLL_INTERVAL_SECONDS = 0.05
@@ -89,10 +91,17 @@ class BubCodexLiveRuntimeStreamService:
     tape_id_factory: Callable[[str, State], str] | None = None
     tool_runtime_context: ToolRuntimeContext | None = None
 
-    def close(self) -> None:
+    async def close(self) -> None:
         close = getattr(self.codex_turn_streams, "close", None)
         if callable(close):
-            close()
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        close_tape_store = getattr(self.tape_store, "close", None)
+        if callable(close_tape_store):
+            result = close_tape_store()
+            if inspect.isawaitable(result):
+                await result
 
     def current_tape_store(self) -> TapeStore | None:
         return self.tape_store
@@ -170,7 +179,7 @@ async def _iter_live_turn_events(
     state: State,
     tool_runtime_context: ToolRuntimeContext | None,
 ):
-    translator = CodexTurnTranslator(
+    translator = BubCodexNotificationTranslator(
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=context.anchor_id,
@@ -194,10 +203,10 @@ async def _iter_live_turn_events(
         async for record in _iter_turn_records_with_steering(turn_session, state=state):
             if not record_belongs_to_thread(record, context.thread_id):
                 continue
-            translation = translator.accept(record)
+            translation = translator.translate(record)
             await tape_store.append_many(translation.tape_events)
-            for decision in translation.stream_decisions:
-                yield to_stream_event(decision)
+            for stream_event in translation.stream_events:
+                yield stream_event
     except Exception as exc:
         await tape_store.append(
             runtime_error_event(
@@ -209,8 +218,8 @@ async def _iter_live_turn_events(
                 thread_id=context.thread_id,
             )
         )
-        for decision in stream_error_decisions(exc):
-            yield to_stream_event(decision)
+        for stream_event in stream_error_events(exc):
+            yield stream_event
         return
     finally:
         _clear_tool_runtime_turn_context(
@@ -219,8 +228,8 @@ async def _iter_live_turn_events(
             turn_id=turn_id,
         )
         turn_session.close()
-    for decision in translator.finish().stream_decisions:
-        yield to_stream_event(decision)
+    for stream_event in translator.finish().stream_events:
+        yield stream_event
 
 
 async def _iter_turn_records_with_steering(
@@ -267,8 +276,8 @@ def _drain_steering(turn_session: CodexTurnSession, steering: Any) -> None:
 
 def _stream_error(exc: Exception) -> AsyncStreamEvents:
     async def iterator():
-        for decision in stream_error_decisions(exc):
-            yield to_stream_event(decision)
+        for stream_event in stream_error_events(exc):
+            yield stream_event
 
     return AsyncStreamEvents(iterator(), state=StreamState())
 
@@ -279,12 +288,12 @@ def _stream_context_unavailable(context: ContextUnavailable) -> AsyncStreamEvent
     text = f"{error_type}: {message}"
 
     async def iterator():
-        for decision in (
-            StreamDecision("error", {"kind": "unknown", "message": message}),
-            StreamDecision("text", {"delta": text}),
-            StreamDecision("final", {"text": text, "ok": False}),
+        for stream_event in (
+            StreamEvent("error", {"kind": "unknown", "message": message}),
+            StreamEvent("text", {"delta": text}),
+            StreamEvent("final", {"text": text, "ok": False}),
         ):
-            yield to_stream_event(decision)
+            yield stream_event
 
     return AsyncStreamEvents(iterator(), state=StreamState())
 

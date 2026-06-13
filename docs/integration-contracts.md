@@ -307,10 +307,13 @@ thread creation call does not receive this text. The runtime wraps it into the
 first real user turn only; resumed turns send the raw user prompt.
 
 `RuntimeStreamService.current_tape_store()` is the plugin-facing port for
-comma-command handoff recording. `LazyRuntimeStreamService` may initialize and
-cache the live runtime to provide a stable tape store before the first normal
-chat turn. If Bub has no active tape store, comma handoff delegation still runs,
-but no bub-codex Anchor is recorded.
+comma-command handoff recording. `LazyRuntimeStreamService` resolves the active
+Bub tape store directly for comma handoff and does not start a Codex SDK runtime
+for that path. Normal model turns build a Codex runtime per Bub turn and close
+it after the stream is consumed. Continuity comes from tape Anchors and
+`codex.thread.bound`, not from an in-process Codex client cache. If Bub has no
+active tape store, comma handoff delegation still runs, but no bub-codex Anchor
+is recorded.
 
 ## Extension Boundaries
 
@@ -320,12 +323,18 @@ SDK or Bub details through the codebase:
 - `TapeStore` for richer or async tape persistence.
 - `CodexThreadContextAdapter` / `CodexThreadService` for new Codex thread or turn
   capabilities.
-- `runtime_adapter.facts_from_notification_record` for new Codex notification
-  methods.
+- `runtime_adapter.py` for shared raw notification record helper functions.
+- `notification_translator.py` for changing which Codex notifications produce
+  Bub tape or stream output.
 - `tool_projection` for new tool item types.
-- `compact_projection` only when the adapter produces a real compaction fact
+- `compact_projection` only when Codex produces a real compaction notification
   that the current runtime uses.
 - `BubToolRuntimeContext` for new fields passed to Bub tools.
 
 Do not add speculative event fields or modules for SDK behavior that is not
 produced by the current adapter or required by a current workflow.
+
+SDK `error` notifications are observed Codex payloads and are projected to tape
+as `codex.error.observed`. User-visible stream `error` events and failed
+`final` results come from runtime exceptions or unavailable context, not from
+the observed SDK notification alone.

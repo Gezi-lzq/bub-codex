@@ -13,12 +13,12 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from bub_codex.codex_thread_service import BUB_CHANNEL_DEVELOPER_INSTRUCTIONS, MaterializingCodexThreadService  # noqa: E402
+from bub_codex.codex_thread_service import BUB_CHANNEL_DEVELOPER_INSTRUCTIONS, CodexManager  # noqa: E402
 from bub_codex.codex_client import DynamicToolSpec  # noqa: E402
 from codex_record_builders import agent_message_completed, turn_completed, turn_started  # noqa: E402
 
 
-class MaterializingCodexThreadServiceTest(unittest.TestCase):
+class CodexManagerTest(unittest.TestCase):
     def test_stream_records_ignore_foreign_thread_completed_without_ending_current_turn(self) -> None:
         client = FakeCodexClient(
             [
@@ -35,7 +35,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
                 _event(turn_completed(thread_id="current-thread", turn_id="turn-1")),
             ]
         )
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         session = service.start_turn_stream(
             thread_id="current-thread",
@@ -67,7 +67,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
                 _event(turn_completed(thread_id="current-thread", turn_id="turn-1")),
             ]
         )
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         session = service.start_turn_stream(
             thread_id="current-thread",
@@ -97,7 +97,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
                 _event(turn_started(thread_id="current-thread", turn_id="turn-1")),
             ]
         )
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         session = service.start_turn_stream(
             thread_id="current-thread",
@@ -112,7 +112,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
 
     def test_turn_session_steers_current_codex_turn(self) -> None:
         client = FakeCodexClient([])
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         session = service.start_turn_stream(
             thread_id="current-thread",
@@ -125,7 +125,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
 
     def test_close_closes_underlying_codex_client_when_supported(self) -> None:
         client = FakeCodexClient([])
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         service.close()
 
@@ -139,7 +139,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
             description="Add a handoff anchor",
             input_schema={"type": "object", "properties": {}},
         )
-        service = MaterializingCodexThreadService(client, cwd="/workspace", dynamic_tools=(tool,))
+        service = CodexManager(client, cwd="/workspace", dynamic_tools=(tool,))
 
         materialization = service.materialize_thread(
             cwd="/workspace",
@@ -154,7 +154,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
 
     def test_materialization_adds_bub_channel_developer_instructions(self) -> None:
         client = FakeCodexClient([])
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         service.materialize_thread(
             cwd="/workspace",
@@ -168,7 +168,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
 
     def test_materialization_does_not_start_a_hidden_codex_turn(self) -> None:
         client = FakeCodexClient([])
-        service = MaterializingCodexThreadService(client, cwd="/workspace")
+        service = CodexManager(client, cwd="/workspace")
 
         service.materialize_thread(
             cwd="/workspace",
@@ -186,7 +186,7 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
             description="Add a handoff anchor",
             input_schema={"type": "object", "properties": {}},
         )
-        service = MaterializingCodexThreadService(
+        service = CodexManager(
             client,
             cwd="/workspace",
             approval_policy="never",

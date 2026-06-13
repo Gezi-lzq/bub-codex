@@ -1,123 +1,152 @@
-"""User-turn tape projection boundary.
-
-This module maps normalized Codex facts from one user turn into Bub tape events.
-It delegates specialized tool and compaction facts to their projection modules.
-"""
+"""User-turn notification to tape-event mapping."""
 
 from __future__ import annotations
 
 from typing import Iterable
 
-from .runtime_adapter import CodexFact
 from .compact_projection import project_compaction_events
 from .json_utils import JsonObject
+from .runtime_adapter import (
+    record_event_id,
+    record_item,
+    record_item_id,
+    record_payload,
+    record_thread_id,
+    record_turn_id,
+)
 from .tape_events import TapeEvent, make_tape_event
 from .tool_projection import project_tool_event
 
 
 def project_user_turn_events(
-    facts: Iterable[CodexFact],
+    records: Iterable[JsonObject],
     *,
     session_id: str,
     tape_id: str,
     anchor_id: str | None,
+    source: str = "sdk_stream:user_turn",
 ) -> list[TapeEvent]:
     events: list[TapeEvent] = []
-    for fact in facts:
-        if fact.kind == "codex.turn.started":
-            events.append(_project_turn_fact(fact, "codex.turn.started", session_id, tape_id, anchor_id))
+    for record in records:
+        method = str(record.get("method") or "")
+        if method == "turn/started":
+            events.append(_project_turn_record(record, "codex.turn.started", session_id, tape_id, anchor_id, source))
         elif tool_event := project_tool_event(
-            fact,
+            record,
             session_id=session_id,
             tape_id=tape_id,
             anchor_id=anchor_id,
+            source=source,
         ):
             events.append(tool_event)
-        elif fact.kind == "codex.assistant_message.completed":
-            events.append(_project_assistant_message_fact(fact, session_id, tape_id, anchor_id))
-        elif fact.kind == "codex.thread.compacted":
+        elif _is_completed_assistant_message(record):
+            events.append(_project_assistant_message_record(record, session_id, tape_id, anchor_id, source))
+        elif _is_completed_context_compaction(record):
             events.extend(
                 project_compaction_events(
-                    [fact],
+                    [record],
                     session_id=session_id,
                     tape_id=tape_id,
                     initiator="codex_runtime",
                     reason="auto_compact",
+                    source=source,
                 )
             )
-        elif fact.kind == "codex.error.observed":
-            events.append(_project_codex_error_fact(fact, session_id, tape_id, anchor_id))
-        elif fact.kind == "codex.turn.completed":
-            events.append(_project_turn_fact(fact, "codex.turn.completed", session_id, tape_id, anchor_id))
+        elif method == "error":
+            events.append(_project_codex_error_record(record, session_id, tape_id, anchor_id, source))
+        elif method == "turn/completed":
+            events.append(_project_turn_record(record, "codex.turn.completed", session_id, tape_id, anchor_id, source))
     return events
 
 
-def _project_assistant_message_fact(
-    fact: CodexFact,
+def _is_completed_assistant_message(record: JsonObject) -> bool:
+    return record.get("method") == "item/completed" and record_item(record).get("type") == "agentMessage"
+
+
+def _is_completed_context_compaction(record: JsonObject) -> bool:
+    return record.get("method") == "item/completed" and record_item(record).get("type") == "contextCompaction"
+
+
+def _project_assistant_message_record(
+    record: JsonObject,
     session_id: str,
     tape_id: str,
     anchor_id: str | None,
+    source: str,
 ) -> TapeEvent:
+    item = record_item(record)
     payload: JsonObject = {
-        "source_fact_id": fact.event_id,
-        "source_item_id": fact.item_id,
-        "assistant_text": fact.payload.get("text"),
-        "phase": fact.payload.get("phase"),
+        "source_fact_id": record_event_id(
+            record,
+            kind="codex.assistant_message.completed",
+            source=source,
+            payload={
+                "text": item.get("text"),
+                "phase": item.get("phase"),
+                "raw": record_payload(record),
+            },
+        ),
+        "source_item_id": record_item_id(record),
+        "assistant_text": item.get("text"),
+        "phase": item.get("phase"),
     }
     return make_tape_event(
         "codex.assistant_message.completed",
         payload=payload,
-        occurred_at=fact.occurred_at,
+        occurred_at=str(record.get("ts")) if record.get("ts") is not None else None,
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=anchor_id,
-        thread_id=fact.thread_id,
-        turn_id=fact.turn_id,
+        thread_id=record_thread_id(record),
+        turn_id=record_turn_id(record),
     )
 
 
-def _project_turn_fact(
-    fact: CodexFact,
+def _project_turn_record(
+    record: JsonObject,
     event_type: str,
     session_id: str,
     tape_id: str,
     anchor_id: str | None,
+    source: str,
 ) -> TapeEvent:
     return make_tape_event(
         event_type,
         payload={
             "purpose": "user_turn",
-            "source_fact_id": fact.event_id,
+            "source_fact_id": record_event_id(record, kind=event_type, source=source),
         },
-        occurred_at=fact.occurred_at,
+        occurred_at=str(record.get("ts")) if record.get("ts") is not None else None,
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=anchor_id,
-        thread_id=fact.thread_id,
-        turn_id=fact.turn_id,
+        thread_id=record_thread_id(record),
+        turn_id=record_turn_id(record),
     )
 
 
-def _project_codex_error_fact(
-    fact: CodexFact,
+def _project_codex_error_record(
+    record: JsonObject,
     session_id: str,
     tape_id: str,
     anchor_id: str | None,
+    source: str,
 ) -> TapeEvent:
-    payload: JsonObject = {
-        "source_fact_id": fact.event_id,
-        "error_type": fact.payload.get("type"),
-        "message": fact.payload.get("message"),
-        "code": fact.payload.get("code"),
-        "raw_error": fact.payload,
+    payload = record_payload(record)
+    tape_payload: JsonObject = {
+        "source_fact_id": record_event_id(record, kind="codex.error.observed", source=source),
+        "error_type": payload.get("type"),
+        "message": payload.get("message"),
+        "code": payload.get("code"),
+        "raw_error": payload,
     }
     return make_tape_event(
         "codex.error.observed",
-        payload=payload,
-        occurred_at=fact.occurred_at,
+        payload=tape_payload,
+        occurred_at=str(record.get("ts")) if record.get("ts") is not None else None,
         session_id=session_id,
         tape_id=tape_id,
         anchor_id=anchor_id,
-        thread_id=fact.thread_id,
-        turn_id=fact.turn_id,
+        thread_id=record_thread_id(record),
+        turn_id=record_turn_id(record),
     )

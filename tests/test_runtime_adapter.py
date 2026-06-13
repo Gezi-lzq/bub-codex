@@ -12,53 +12,47 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from bub_codex.runtime_adapter import facts_from_notification_records  # noqa: E402
+from bub_codex.runtime_adapter import record_turn_id  # noqa: E402
 from codex_record_builders import agent_message_completed  # noqa: E402
 
 
 class RuntimeAdapterTest(unittest.TestCase):
-    def test_notification_records_resolve_turn_id_from_payload_record_then_default(self) -> None:
-        records = (
-            {
-                "method": "item/agentMessage/delta",
-                "payload": {"threadId": "thread-1", "itemId": "message-1", "delta": "hi"},
-            },
-            {
-                "method": "item/agentMessage/delta",
-                "payload": {"threadId": "thread-1", "itemId": "message-2", "delta": "there"},
-                "turn_id": "record-turn",
-            },
-            {
-                **agent_message_completed(
-                    text="done",
-                    phase="final_answer",
-                    thread_id="thread-1",
-                    turn_id="payload-turn",
-                    item_id="message-3",
-                ),
-                "turn_id": "record-turn",
-            },
-        )
-
-        facts = facts_from_notification_records(
-            records,
-            source="sdk_stream:test",
-            turn_id="default-turn",
-        )
-
+    def test_record_turn_id_prefers_payload_record_then_default(self) -> None:
         self.assertEqual(
-            [fact.kind for fact in facts],
-            [
-                "codex.assistant_message.delta",
-                "codex.assistant_message.delta",
-                "codex.item.completed",
-                "codex.assistant_message.completed",
-            ],
+            record_turn_id(
+                {
+                    "method": "item/agentMessage/delta",
+                    "payload": {"threadId": "thread-1", "itemId": "message-1", "delta": "hi"},
+                    "turn_id": "default-turn",
+                }
+            ),
+            "default-turn",
         )
-        self.assertEqual(facts[0].turn_id, "default-turn")
-        self.assertEqual(facts[1].turn_id, "record-turn")
-        self.assertEqual(facts[2].turn_id, "payload-turn")
-        self.assertEqual(facts[3].turn_id, "payload-turn")
+        self.assertEqual(
+            record_turn_id(
+                {
+                    "method": "item/agentMessage/delta",
+                    "payload": {"threadId": "thread-1", "turnId": "payload-turn", "itemId": "message-2", "delta": "hi"},
+                    "turn_id": "record-turn",
+                }
+            ),
+            "payload-turn",
+        )
+        self.assertEqual(
+            record_turn_id(
+                {
+                    **agent_message_completed(
+                        text="done",
+                        phase="final_answer",
+                        thread_id="thread-1",
+                        turn_id="nested-turn",
+                        item_id="message-3",
+                    ),
+                    "turn_id": "record-turn",
+                }
+            ),
+            "nested-turn",
+        )
 
 
 if __name__ == "__main__":

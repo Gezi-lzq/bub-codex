@@ -15,18 +15,23 @@ if str(TESTS) not in sys.path:
 from codex_record_builders import (  # noqa: E402
     agent_message_completed,
     agent_message_delta,
+    command_execution_completed,
+    command_execution_started,
     context_compaction_completed,
     error_notification,
 )
 from bub_codex.tape_events import make_tape_event  # noqa: E402
-from bub_codex.turn_translator import CodexTurnTranslator, stream_success_decisions_from_tape_events  # noqa: E402
+from bub_codex.notification_translator import (  # noqa: E402
+    BubCodexNotificationTranslator,
+    stream_success_events_from_tape_events,
+)
 
 
-class CodexTurnTranslatorTest(unittest.TestCase):
+class BubCodexNotificationTranslatorTest(unittest.TestCase):
     def test_commentary_writes_tape_without_stream_text(self) -> None:
         translator = _translator()
 
-        result = translator.accept(
+        result = translator.translate(
             agent_message_completed(
                 text="I will inspect the workspace.",
                 phase="commentary",
@@ -38,12 +43,12 @@ class CodexTurnTranslatorTest(unittest.TestCase):
             ["codex.assistant_message.completed"],
         )
         self.assertEqual(result.tape_events[0].payload["phase"], "commentary")
-        self.assertEqual(result.stream_decisions, ())
+        self.assertEqual(result.stream_events, ())
 
     def test_final_answer_writes_tape_and_streams_text(self) -> None:
         translator = _translator()
 
-        result = translator.accept(agent_message_completed(text="Done.", phase="final_answer"))
+        result = translator.translate(agent_message_completed(text="Done.", phase="final_answer"))
         finish = translator.finish()
 
         self.assertEqual(
@@ -51,60 +56,60 @@ class CodexTurnTranslatorTest(unittest.TestCase):
             ["codex.assistant_message.completed"],
         )
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in result.stream_decisions],
+            [(event.kind, event.data) for event in result.stream_events],
             [("text", {"delta": "Done."})],
         )
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [(event.kind, event.data) for event in finish.stream_events],
             [("final", {"text": "Done.", "ok": True})],
         )
 
     def test_final_answer_delta_streams_without_tape_and_completed_does_not_duplicate_text(self) -> None:
         translator = _translator()
 
-        first = translator.accept(agent_message_delta(delta="Do", phase="final_answer"))
-        second = translator.accept(agent_message_delta(delta="ne.", phase="final_answer"))
-        completed = translator.accept(agent_message_completed(text="Done.", phase="final_answer"))
+        first = translator.translate(agent_message_delta(delta="Do", phase="final_answer"))
+        second = translator.translate(agent_message_delta(delta="ne.", phase="final_answer"))
+        completed = translator.translate(agent_message_completed(text="Done.", phase="final_answer"))
         finish = translator.finish()
 
         self.assertEqual(first.tape_events, ())
         self.assertEqual(second.tape_events, ())
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in first.stream_decisions],
+            [(event.kind, event.data) for event in first.stream_events],
             [("text", {"delta": "Do"})],
         )
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in second.stream_decisions],
+            [(event.kind, event.data) for event in second.stream_events],
             [("text", {"delta": "ne."})],
         )
         self.assertEqual(
             [event.type for event in completed.tape_events],
             ["codex.assistant_message.completed"],
         )
-        self.assertEqual(completed.stream_decisions, ())
+        self.assertEqual(completed.stream_events, ())
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [(event.kind, event.data) for event in finish.stream_events],
             [("final", {"text": "Done.", "ok": True})],
         )
 
     def test_final_answer_delta_suppression_is_scoped_to_same_item(self) -> None:
         translator = _translator()
 
-        first_delta = translator.accept(
+        first_delta = translator.translate(
             agent_message_delta(
                 delta="First.",
                 phase="final_answer",
                 item_id="msg-1",
             )
         )
-        first_completed = translator.accept(
+        first_completed = translator.translate(
             agent_message_completed(
                 text="First.",
                 phase="final_answer",
                 item_id="msg-1",
             )
         )
-        second_completed = translator.accept(
+        second_completed = translator.translate(
             agent_message_completed(
                 text="Second.",
                 phase="final_answer",
@@ -114,36 +119,36 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         finish = translator.finish()
 
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in first_delta.stream_decisions],
+            [(event.kind, event.data) for event in first_delta.stream_events],
             [("text", {"delta": "First."})],
         )
-        self.assertEqual(first_completed.stream_decisions, ())
+        self.assertEqual(first_completed.stream_events, ())
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in second_completed.stream_decisions],
+            [(event.kind, event.data) for event in second_completed.stream_events],
             [("text", {"delta": "Second."})],
         )
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [(event.kind, event.data) for event in finish.stream_events],
             [("final", {"text": "First.\nSecond.", "ok": True})],
         )
 
     def test_commentary_delta_is_not_streamed_or_written_to_tape(self) -> None:
         translator = _translator()
 
-        result = translator.accept(agent_message_delta(delta="I will inspect.", phase="commentary"))
+        result = translator.translate(agent_message_delta(delta="I will inspect.", phase="commentary"))
 
         self.assertEqual(result.tape_events, ())
-        self.assertEqual(result.stream_decisions, ())
+        self.assertEqual(result.stream_events, ())
 
     def test_finish_uses_last_assistant_message_when_no_final_answer_exists(self) -> None:
         translator = _translator()
 
-        translator.accept(agent_message_completed(text="First commentary.", phase="commentary"))
-        translator.accept(agent_message_completed(text="Last commentary.", phase="commentary"))
+        translator.translate(agent_message_completed(text="First commentary.", phase="commentary"))
+        translator.translate(agent_message_completed(text="Last commentary.", phase="commentary"))
         finish = translator.finish()
 
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in finish.stream_decisions],
+            [(event.kind, event.data) for event in finish.stream_events],
             [
                 ("text", {"delta": "Last commentary."}),
                 ("final", {"text": "Last commentary.", "ok": True}),
@@ -153,7 +158,7 @@ class CodexTurnTranslatorTest(unittest.TestCase):
     def test_context_compaction_creates_compact_anchor_events(self) -> None:
         translator = _translator()
 
-        result = translator.accept(context_compaction_completed())
+        result = translator.translate(context_compaction_completed())
 
         event_types = [event.type for event in result.tape_events]
         compact_anchors = [
@@ -176,16 +181,29 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         self.assertEqual(compact_bindings[0].thread_id, compact_anchors[0].thread_id)
         self.assertNotIn("snapshot_fact_id", compact_bindings[0].payload["refs"])
 
+    def test_tool_started_and_completed_have_distinct_source_ids(self) -> None:
+        translator = _translator()
+
+        started = translator.translate(command_execution_started(command="pwd", cwd="/workspace"))
+        completed = translator.translate(command_execution_completed(command="pwd", cwd="/workspace", output="/workspace\n"))
+
+        self.assertEqual([event.type for event in started.tape_events], ["bub.tool.call.started"])
+        self.assertEqual([event.type for event in completed.tape_events], ["bub.tool.call.completed"])
+        self.assertNotEqual(
+            started.tape_events[0].payload["source_fact_id"],
+            completed.tape_events[0].payload["source_fact_id"],
+        )
+
     def test_sdk_error_notification_is_written_to_tape(self) -> None:
         translator = _translator()
 
-        result = translator.accept(error_notification(message="model failed", code="bad_request"))
+        result = translator.translate(error_notification(message="model failed", code="bad_request"))
 
         self.assertEqual([event.type for event in result.tape_events], ["codex.error.observed"])
         self.assertEqual(result.tape_events[0].payload["message"], "model failed")
         self.assertEqual(result.tape_events[0].payload["code"], "bad_request")
         self.assertEqual(result.tape_events[0].payload["raw_error"]["message"], "model failed")
-        self.assertEqual(result.stream_decisions, ())
+        self.assertEqual(result.stream_events, ())
 
     def test_sdk_error_notification_preserves_raw_payload(self) -> None:
         translator = _translator()
@@ -201,14 +219,14 @@ class CodexTurnTranslatorTest(unittest.TestCase):
             "requestId": "req-1",
         }
 
-        result = translator.accept({"method": "error", "payload": raw_payload})
+        result = translator.translate({"method": "error", "payload": raw_payload})
 
         self.assertEqual([event.type for event in result.tape_events], ["codex.error.observed"])
         self.assertEqual(result.tape_events[0].payload["raw_error"], raw_payload)
-        self.assertEqual(result.stream_decisions, ())
+        self.assertEqual(result.stream_events, ())
 
     def test_success_fallback_uses_event_turn_id_when_no_assistant_text_exists(self) -> None:
-        decisions = stream_success_decisions_from_tape_events(
+        stream_events = stream_success_events_from_tape_events(
             (
                 make_tape_event(
                     "codex.turn.completed",
@@ -221,14 +239,14 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         )
 
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in decisions],
+            [(event.kind, event.data) for event in stream_events],
             [
                 ("text", {"delta": "codex turn completed: turn-1"}),
                 ("final", {"text": "codex turn completed: turn-1", "ok": True}),
             ],
         )
 
-    def test_success_decisions_accept_one_shot_event_iterables(self) -> None:
+    def test_success_events_accept_one_shot_event_iterables(self) -> None:
         event = make_tape_event(
             "codex.assistant_message.completed",
             payload={"assistant_text": "Done.", "phase": "final_answer"},
@@ -237,10 +255,10 @@ class CodexTurnTranslatorTest(unittest.TestCase):
             turn_id="turn-1",
         )
 
-        decisions = stream_success_decisions_from_tape_events(iter([event]))
+        stream_events = stream_success_events_from_tape_events(iter([event]))
 
         self.assertEqual(
-            [(decision.kind, decision.data) for decision in decisions],
+            [(event.kind, event.data) for event in stream_events],
             [
                 ("text", {"delta": "Done."}),
                 ("final", {"text": "Done.", "ok": True}),
@@ -248,8 +266,8 @@ class CodexTurnTranslatorTest(unittest.TestCase):
         )
 
 
-def _translator() -> CodexTurnTranslator:
-    return CodexTurnTranslator(
+def _translator() -> BubCodexNotificationTranslator:
+    return BubCodexNotificationTranslator(
         session_id="session-1",
         tape_id="tape-1",
         anchor_id="anchor-1",
