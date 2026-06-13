@@ -321,7 +321,7 @@ Future deeper integration should extend one of these ports instead of spreading
 SDK or Bub details through the codebase:
 
 - `TapeStore` for richer or async tape persistence.
-- `CodexThreadContextAdapter` / `CodexThreadService` for new Codex thread or turn
+- `CodexThreadContextAdapter` and `CodexManager` for new Codex thread or turn
   capabilities.
 - `runtime_adapter.py` for shared raw notification record helper functions.
 - `notification_translator.py` for changing which Codex notifications produce

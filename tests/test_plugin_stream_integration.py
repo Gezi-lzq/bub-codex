@@ -14,8 +14,9 @@ if str(SRC) not in sys.path:
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
-from bub_codex.codex_thread_service import CodexTurn, ThreadMaterialization  # noqa: E402
-from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.codex_thread_service import ThreadMaterialization  # noqa: E402
+from bub_codex.live_stream import BubCodexLiveRuntimeStreamService  # noqa: E402
+from bub_codex.runtime_context import RuntimeContextKernel  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from codex_record_builders import (  # noqa: E402
     agent_message_completed,
@@ -24,7 +25,7 @@ from codex_record_builders import (  # noqa: E402
     turn_completed,
     turn_started,
 )
-from plugin_stream_helpers import BatchRuntimeStreamService, run_plugin_stream_once  # noqa: E402
+from plugin_stream_helpers import run_plugin_stream_once  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -41,46 +42,59 @@ class FakeCodexThreadService:
     def resume_thread(self, thread_id: str) -> None:
         self.resumed.append(thread_id)
 
-    def run_turn(self, *, thread_id: str, cwd: str, prompt: str) -> CodexTurn:
+    def start_turn_stream(self, *, thread_id: str, cwd: str, prompt: str):
         self.prompts.append(prompt)
         turn_id = f"codex-user-turn-{len(self.prompts)}"
-        return CodexTurn(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            notification_records=(
-                turn_started(thread_id=thread_id, turn_id=turn_id),
-                agent_message_completed(
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    item_id=f"assistant-message-{len(self.prompts)}",
-                    text="commentary:received",
-                    phase="commentary",
-                ),
-                command_execution_started(
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    item_id="command-1",
-                    command="pwd",
-                    cwd=cwd,
-                ),
-                command_execution_completed(
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    item_id="command-1",
-                    command="pwd",
-                    cwd=cwd,
-                    output=f"{cwd}\n",
-                ),
-                agent_message_completed(
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    item_id=f"assistant-message-final-{len(self.prompts)}",
-                    text="final:received",
-                    phase="final_answer",
-                ),
-                turn_completed(thread_id=thread_id, turn_id=turn_id),
+        records = (
+            turn_started(thread_id=thread_id, turn_id=turn_id),
+            agent_message_completed(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                item_id=f"assistant-message-{len(self.prompts)}",
+                text="commentary:received",
+                phase="commentary",
             ),
+            command_execution_started(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                item_id="command-1",
+                command="pwd",
+                cwd=cwd,
+            ),
+            command_execution_completed(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                item_id="command-1",
+                command="pwd",
+                cwd=cwd,
+                output=f"{cwd}\n",
+            ),
+            agent_message_completed(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                item_id=f"assistant-message-final-{len(self.prompts)}",
+                text="final:received",
+                phase="final_answer",
+            ),
+            turn_completed(thread_id=thread_id, turn_id=turn_id),
         )
+        return FakeTurnSession(turn_id=turn_id, _records=records)
+
+
+@dataclass(slots=True)
+class FakeTurnSession:
+    turn_id: str
+    _records: tuple[dict, ...]
+    closed: bool = False
+
+    def records(self):
+        yield from self._records
+
+    def steer(self, input_text: str) -> None:
+        raise AssertionError("not used")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class PluginStreamIntegrationTest(unittest.TestCase):
@@ -88,8 +102,8 @@ class PluginStreamIntegrationTest(unittest.TestCase):
         async def run():
             store = InMemoryTapeStore()
             threads = FakeCodexThreadService()
-            runtime = BubCodexRuntime(store, threads)
-            stream_service = BatchRuntimeStreamService(runtime)
+            kernel = RuntimeContextKernel(store, threads)
+            stream_service = BubCodexLiveRuntimeStreamService(kernel, store, threads)
             result = await run_plugin_stream_once(
                 stream_service,
                 prompt="hello",
@@ -127,8 +141,8 @@ class PluginStreamIntegrationTest(unittest.TestCase):
         async def run():
             store = InMemoryTapeStore()
             threads = FakeCodexThreadService()
-            runtime = BubCodexRuntime(store, threads)
-            stream_service = BatchRuntimeStreamService(runtime)
+            kernel = RuntimeContextKernel(store, threads)
+            stream_service = BubCodexLiveRuntimeStreamService(kernel, store, threads)
             await run_plugin_stream_once(
                 stream_service,
                 prompt="first",

@@ -56,7 +56,6 @@ accepted because each file owns a concrete side-effect boundary or invariant:
 | `new_thread_materialization.py` | startup context evidence and thread-binding events |
 | `startup_context.py` | first-turn prompt wrapper |
 | `live_stream.py` | Bub streaming side effects |
-| `runtime.py` | batch/reference one-turn runner |
 | `codex_client.py` | Codex app-server params and dynamic-tool request dispatch |
 | `codex_thread_service.py` | Codex thread/turn SDK calls and notification collection |
 | `runtime_adapter.py` | private raw SDK notification record helpers |

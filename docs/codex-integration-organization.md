@@ -383,7 +383,7 @@ no Anchor exists
 
 `CodexThreadBindingResolver` 只做解析，不调用 Codex SDK，也不 append tape。当前代码中，
 `resolve_codex_thread_binding()` 和 `CodexThreadBindingResolver.resolve()` 承担这个
-resolver 角色；`resolve_runtime_context()` 只作为兼容别名保留。
+resolver 角色。
 
 创建 bootstrap Anchor、materialize startup context、调用 Codex thread service 创建或
 resume thread、写入 `codex.thread.bound`，都属于 `RuntimeContextKernel` 这一类
@@ -838,8 +838,7 @@ translator 只拥有保证 stream 语义正确所需的 turn-local 状态：
 
 1. 如果 record helper 不再提供足够收益，可以把 `runtime_adapter` 和 projection helpers
    继续折叠进 `notification_translator.py` 私有函数。
-2. `RuntimeContextResolution` 已作为兼容别名保留；新代码应使用 `CodexThreadBindingResolution`
-   和 `CodexThreadBindingResolver`，且不改变
+2. 新代码应使用 `CodexThreadBindingResolution` 和 `CodexThreadBindingResolver`，且不改变
    `runtime_context.py` 对 continuity decision/execution 的所有权。
 3. 可以进一步把 `codex_thread_service.py` / `codex_client.py` 的命名对齐为薄 Codex manager
    边界，但不能新增 SDK contract 未验证的 control 操作。

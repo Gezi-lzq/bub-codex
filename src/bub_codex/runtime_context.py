@@ -77,13 +77,6 @@ def resolve_codex_thread_binding(events: list[TapeEvent]) -> CodexThreadBindingR
     return CodexThreadBindingResolver().resolve(events)
 
 
-RuntimeContextResolution = CodexThreadBindingResolution
-
-
-def resolve_runtime_context(events: list[TapeEvent]) -> CodexThreadBindingResolution:
-    return resolve_codex_thread_binding(events)
-
-
 class CodexThreadContextAdapter(Protocol):
     def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
         ...

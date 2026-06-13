@@ -9,7 +9,7 @@ from __future__ import annotations
 import inspect
 import shlex
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from republic import AsyncStreamEvents
 
@@ -21,11 +21,6 @@ from .config import load_settings
 from .runtime_services import LazyRuntimeStreamService, RuntimeStreamService, UnconfiguredRuntimeStreamService
 from .stream_utils import default_tape_id, prompt_text, stream_text
 from .new_thread_materialization import create_new_thread_anchor_events
-
-
-class CommaCommandAgent(Protocol):
-    def run(self, *, session_id: str, prompt: str | list[dict], state: State) -> Any:
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +93,7 @@ def _is_comma_message(message: Any) -> bool:
     return _is_comma_command(content_of(message))
 
 
-def _comma_command_agent(state: State) -> CommaCommandAgent | None:
+def _comma_command_agent(state: State) -> Any | None:
     agent = state.get("_runtime_agent")
     run = getattr(agent, "run", None)
     return agent if callable(run) else None

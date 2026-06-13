@@ -50,13 +50,6 @@ class ThreadMaterialization:
     notification_records: tuple[JsonObject, ...] = field(default_factory=tuple)
 
 
-@dataclass(frozen=True, slots=True)
-class CodexTurn:
-    thread_id: str
-    turn_id: str
-    notification_records: tuple[JsonObject, ...] = field(default_factory=tuple)
-
-
 @dataclass(slots=True)
 class CodexTurnSession:
     client: CodexClientPort
@@ -121,16 +114,6 @@ class CodexManager:
         if callable(close):
             close()
 
-    def run_turn(self, *, thread_id: str, cwd: str, prompt: str) -> CodexTurn:
-        turn = self._client.turn_start(thread_id, prompt, {"cwd": cwd})
-        turn_id = str(turn.turn.id)
-        notification_records = _collect_turn_records(self._client, turn_id=turn_id, thread_id=thread_id)
-        return CodexTurn(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            notification_records=notification_records,
-        )
-
     def start_turn_stream(
         self,
         *,
@@ -144,16 +127,6 @@ class CodexManager:
             turn_id=str(turn.turn.id),
             thread_id=thread_id,
         )
-
-
-MaterializingCodexThreadService = CodexManager
-
-
-def _collect_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str) -> tuple[JsonObject, ...]:
-    try:
-        return tuple(_iter_turn_records(client, turn_id=turn_id, thread_id=thread_id))
-    finally:
-        client.unregister_turn_notifications(turn_id)
 
 
 def _iter_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str) -> Iterator[JsonObject]:

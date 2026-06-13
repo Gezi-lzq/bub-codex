@@ -65,6 +65,7 @@ class LazyRuntimeStreamService:
     def __init__(self, framework: Any, *, settings: BubCodexSettings) -> None:
         self.framework = framework
         self.settings = settings
+        self._cached_runtime: RuntimeStreamService | None = None
 
     async def run_stream(
         self,
@@ -74,7 +75,7 @@ class LazyRuntimeStreamService:
         state: State,
     ) -> AsyncStreamEvents:
         try:
-            runtime = self._build_runtime()
+            runtime = self._runtime_for_current_configuration()
         except Exception as exc:
             return stream_text(
                 f"bub-codex runtime is not configured: {exc}",
@@ -84,20 +85,22 @@ class LazyRuntimeStreamService:
         try:
             stream = await runtime.run_stream(prompt=prompt, session_id=session_id, state=state)
         except Exception:
-            await close_runtime(runtime)
+            await self._close_cached_runtime()
             raise
+        close_after_stream = should_close_runtime_after_stream_consumption()
 
         async def iterator():
             try:
                 async for event in stream:
                     yield event
             finally:
-                await close_runtime(runtime)
+                if close_after_stream:
+                    await self._close_cached_runtime()
 
         return AsyncStreamEvents(iterator(), state=stream_state(stream))
 
-    def close(self) -> None:
-        return None
+    async def close(self) -> None:
+        await self._close_cached_runtime()
 
     def current_tape_store(self) -> TapeStore | None:
         if not self.settings.use_bub_tape_store:
@@ -109,6 +112,25 @@ class LazyRuntimeStreamService:
 
     def _build_runtime(self) -> RuntimeStreamService:
         return build_runtime_stream_service(self.framework, settings=self.settings)
+
+    def _runtime_for_current_configuration(self) -> RuntimeStreamService:
+        if self._cached_runtime is None:
+            self._cached_runtime = self._build_runtime()
+        self._bind_current_tape_store(self._cached_runtime)
+        return self._cached_runtime
+
+    def _bind_current_tape_store(self, runtime: RuntimeStreamService) -> None:
+        if not self.settings.use_bub_tape_store:
+            return
+        tape_store = runtime_tape_store(self.framework, self.settings)
+        set_tape_store = getattr(runtime, "set_tape_store", None)
+        if callable(set_tape_store):
+            set_tape_store(tape_store)
+
+    async def _close_cached_runtime(self) -> None:
+        runtime = self._cached_runtime
+        self._cached_runtime = None
+        await close_runtime(runtime)
 
 
 def build_runtime_stream_service(
@@ -206,6 +228,11 @@ def active_bub_tape_store(framework: Any) -> Any | None:
     if not callable(get_tape_store):
         return None
     return get_tape_store()
+
+
+def should_close_runtime_after_stream_consumption(argv: list[str] | None = None) -> bool:
+    args = sys.argv[1:] if argv is None else argv
+    return "run" in args
 
 
 def _model_visible_bub_tools(names: list[str]) -> list[Any]:

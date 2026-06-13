@@ -106,6 +106,10 @@ class BubCodexLiveRuntimeStreamService:
     def current_tape_store(self) -> TapeStore | None:
         return self.tape_store
 
+    def set_tape_store(self, tape_store: TapeStore) -> None:
+        self.tape_store = tape_store
+        self.context_kernel.tape_store = tape_store
+
     async def run_stream(
         self,
         *,

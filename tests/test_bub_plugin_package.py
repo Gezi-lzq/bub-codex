@@ -255,7 +255,7 @@ class BubPluginPackageTest(unittest.TestCase):
         self.assertIs(captured["store"], framework_tape_store)
         self.assertEqual(text, "package lifecycle ok")
 
-    def test_lazy_runtime_closes_each_runtime_after_stream_consumption(self) -> None:
+    def test_lazy_runtime_reuses_runtime_for_same_workspace_and_settings(self) -> None:
         class FakeTapeStore:
             pass
 
@@ -295,11 +295,12 @@ class BubPluginPackageTest(unittest.TestCase):
             first_text = asyncio.run(_collect_text(first))
             second_text = asyncio.run(_collect_text(second))
 
-        self.assertEqual(len(built_services), 2)
+        self.assertEqual(len(built_services), 1)
         self.assertEqual(first_text, "runtime-1")
-        self.assertEqual(second_text, "runtime-2")
+        self.assertEqual(second_text, "runtime-1")
+        self.assertFalse(built_services[0].closed)
+        asyncio.run(plugin.runtime.close())
         self.assertTrue(built_services[0].closed)
-        self.assertTrue(built_services[1].closed)
 
     def test_lazy_runtime_uses_current_active_tape_store_for_each_turn(self) -> None:
         class FakeTapeStore:
@@ -316,11 +317,13 @@ class BubPluginPackageTest(unittest.TestCase):
 
         framework = FakeFramework()
         plugin = create_plugin(framework)
-        captured_stores: list[FakeTapeStore] = []
+        built_services: list[FakeRuntimeStreamService] = []
 
         def fake_build_runtime_stream_service(active_framework, settings=None):
-            captured_stores.append(active_framework.get_tape_store())
-            return FakeRuntimeStreamService(f"runtime-{len(captured_stores)}")
+            service = FakeRuntimeStreamService(f"runtime-{len(built_services) + 1}")
+            service.set_tape_store(active_framework.get_tape_store())
+            built_services.append(service)
+            return service
 
         with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
             first = asyncio.run(
@@ -341,12 +344,13 @@ class BubPluginPackageTest(unittest.TestCase):
             first_text = asyncio.run(_collect_text(first))
             second_text = asyncio.run(_collect_text(second))
 
-        self.assertEqual(len(captured_stores), 2)
-        self.assertIsNot(captured_stores[0], captured_stores[1])
+        self.assertEqual(len(built_services), 1)
+        self.assertIsInstance(built_services[0].tape_store, RepublicTapeStoreAdapter)
+        self.assertIs(built_services[0].tape_store.store, framework.active_store)
         self.assertEqual(first_text, "runtime-1")
-        self.assertEqual(second_text, "runtime-2")
+        self.assertEqual(second_text, "runtime-1")
 
-    def test_lazy_runtime_closes_service_after_stream_consumption_without_bub_tape_store(self) -> None:
+    def test_lazy_runtime_keeps_service_open_after_stream_consumption_without_bub_tape_store(self) -> None:
         class FakeFramework:
             workspace = ROOT
 
@@ -374,9 +378,46 @@ class BubPluginPackageTest(unittest.TestCase):
 
         self.assertEqual(text, "uncached-runtime")
         self.assertEqual(len(built_services), 1)
+        self.assertFalse(built_services[0].closed)
+        asyncio.run(service.close())
         self.assertTrue(built_services[0].closed)
 
-    def test_lazy_runtime_awaits_async_runtime_close_after_stream_consumption(self) -> None:
+    def test_lazy_runtime_closes_service_after_bub_run_stream_consumption(self) -> None:
+        class FakeFramework:
+            workspace = ROOT
+
+            def get_tape_store(self):
+                return None
+
+        framework = FakeFramework()
+        service = LazyRuntimeStreamService(framework, settings=BubCodexSettings(codex_bin=ROOT / "codex"))
+        built_services: list[FakeRuntimeStreamService] = []
+
+        def fake_build_runtime_stream_service(active_framework, settings=None):
+            runtime = FakeRuntimeStreamService("one-shot-runtime")
+            built_services.append(runtime)
+            return runtime
+
+        original_argv = sys.argv
+        try:
+            sys.argv = ["bub", "run", "hello"]
+            with patch("bub_codex.runtime_services.build_runtime_stream_service", fake_build_runtime_stream_service):
+                stream = asyncio.run(
+                    service.run_stream(
+                        prompt="hello",
+                        session_id="s1",
+                        state={"_runtime_workspace": str(ROOT)},
+                    )
+                )
+                text = asyncio.run(_collect_text(stream))
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(text, "one-shot-runtime")
+        self.assertEqual(len(built_services), 1)
+        self.assertTrue(built_services[0].closed)
+
+    def test_lazy_runtime_awaits_async_runtime_close_when_service_closes(self) -> None:
         class FakeFramework:
             workspace = ROOT
 
@@ -404,6 +445,8 @@ class BubPluginPackageTest(unittest.TestCase):
 
         self.assertEqual(text, "async-close-runtime")
         self.assertEqual(len(built_services), 1)
+        self.assertFalse(built_services[0].closed)
+        asyncio.run(service.close())
         self.assertTrue(built_services[0].closed)
 
     def test_lazy_runtime_closes_service_when_run_stream_raises(self) -> None:
@@ -565,6 +608,12 @@ class FakeRuntimeStreamService:
 
     async def run_stream(self, *, prompt, session_id, state):
         return stream_text(self.text)
+
+    def current_tape_store(self):
+        return self.tape_store
+
+    def set_tape_store(self, tape_store) -> None:
+        self.tape_store = tape_store
 
     def close(self) -> None:
         self.closed = True

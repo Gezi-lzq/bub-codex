@@ -17,7 +17,7 @@ if str(TESTS) not in sys.path:
 
 from bub_codex.codex_thread_service import ThreadMaterialization  # noqa: E402
 from bub_codex.live_stream import BubCodexLiveRuntimeStreamService  # noqa: E402
-from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.runtime_context import RuntimeContextKernel  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from codex_record_builders import (  # noqa: E402
     agent_message_delta,
@@ -252,8 +252,8 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_writes_commentary_to_tape_but_only_streams_final_answer(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, FakeTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -289,9 +289,9 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_wraps_startup_context_on_created_thread_prompt(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
             stream_service = FakeTurnStreamService()
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, stream_service)
+            live = BubCodexLiveRuntimeStreamService(kernel, store, stream_service)
             await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -315,8 +315,8 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_streams_final_answer_delta_without_duplicate_completed_text(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, DeltaTurnStreamService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, DeltaTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -354,10 +354,10 @@ class LiveStreamTest(unittest.TestCase):
             )
             await store.append_many([anchor, binding])
             threads = FakeMaterializingThreadService()
-            runtime = BubCodexRuntime(store, threads)
+            kernel = RuntimeContextKernel(store, threads)
             stream_service = FakeTurnStreamService()
             live = BubCodexLiveRuntimeStreamService(
-                runtime.context_kernel,
+                kernel,
                 store,
                 stream_service,
                 tape_id_factory=_test_tape_id_factory,
@@ -394,9 +394,9 @@ class LiveStreamTest(unittest.TestCase):
             )
             await store.append_many([anchor, binding])
             threads = FakeMaterializingThreadService(fail_resume=True)
-            runtime = BubCodexRuntime(store, threads)
+            kernel = RuntimeContextKernel(store, threads)
             live = BubCodexLiveRuntimeStreamService(
-                runtime.context_kernel,
+                kernel,
                 store,
                 FakeTurnStreamService(),
                 tape_id_factory=_test_tape_id_factory,
@@ -441,8 +441,8 @@ class LiveStreamTest(unittest.TestCase):
                 ]
             )
             threads = FakeMaterializingThreadService()
-            runtime = BubCodexRuntime(store, threads)
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            kernel = RuntimeContextKernel(store, threads)
+            live = BubCodexLiveRuntimeStreamService(kernel, store, FakeTurnStreamService())
             result = await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -482,8 +482,8 @@ class LiveStreamTest(unittest.TestCase):
 
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, CompactingTurnStreamService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, CompactingTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="compact",
@@ -532,8 +532,8 @@ class LiveStreamTest(unittest.TestCase):
         async def run():
             store = InMemoryTapeStore()
             threads = FakeMaterializingThreadService()
-            runtime = BubCodexRuntime(store, threads)
-            first = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, CompactingTurnStreamService())
+            kernel = RuntimeContextKernel(store, threads)
+            first = BubCodexLiveRuntimeStreamService(kernel, store, CompactingTurnStreamService())
             await run_plugin_stream_once(
                 first,
                 prompt="compact",
@@ -541,7 +541,7 @@ class LiveStreamTest(unittest.TestCase):
                 state={"_runtime_workspace": "/workspace"},
                 tape_store=store,
             )
-            second = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            second = BubCodexLiveRuntimeStreamService(kernel, store, FakeTurnStreamService())
             result = await run_plugin_stream_once(
                 second,
                 prompt="after compact",
@@ -560,8 +560,8 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_surfaces_materialization_failure_root_cause(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FailingMaterializationThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FakeTurnStreamService())
+            kernel = RuntimeContextKernel(store, FailingMaterializationThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, FakeTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -579,9 +579,9 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_closes_turn_session_when_consumer_stops_early(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
             stream_service = SessionTurnStreamService()
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, stream_service)
+            live = BubCodexLiveRuntimeStreamService(kernel, store, stream_service)
             stream = await live.run_stream(
                 prompt="hello",
                 session_id="s1",
@@ -599,8 +599,8 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_filters_foreign_thread_notifications(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, ForeignThreadTurnStreamService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, ForeignThreadTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -625,9 +625,9 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_drains_steering_messages_into_active_codex_turn(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
             stream_service = CapturingSteeringTurnStreamService()
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, stream_service)
+            live = BubCodexLiveRuntimeStreamService(kernel, store, stream_service)
             result = await run_plugin_stream_once(
                 live,
                 prompt="hello",
@@ -649,10 +649,10 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_registers_and_clears_dynamic_tool_context_for_turn(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
             tool_context = RecordingToolRuntimeContext()
             live = BubCodexLiveRuntimeStreamService(
-                runtime.context_kernel,
+                kernel,
                 store,
                 FakeTurnStreamService(),
                 tape_id_factory=_test_tape_id_factory,
@@ -683,8 +683,8 @@ class LiveStreamTest(unittest.TestCase):
     def test_live_bridge_records_runtime_error_when_turn_stream_fails(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
-            live = BubCodexLiveRuntimeStreamService(runtime.context_kernel, store, FailingTurnStreamService())
+            kernel = RuntimeContextKernel(store, FakeMaterializingThreadService())
+            live = BubCodexLiveRuntimeStreamService(kernel, store, FailingTurnStreamService())
             return await run_plugin_stream_once(
                 live,
                 prompt="hello",

@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from bub_codex.codex_thread_service import ThreadMaterialization  # noqa: E402
-from bub_codex.runtime import BubCodexRuntime  # noqa: E402
+from bub_codex.runtime_context import RuntimeContextKernel  # noqa: E402
 from bub_codex.startup_context import prompt_with_startup_context  # noqa: E402
 from bub_codex.tape_store import InMemoryTapeStore  # noqa: E402
 from bub_codex.tape_events import make_tape_event  # noqa: E402
@@ -180,8 +180,8 @@ class ContextMaterializationTest(unittest.TestCase):
             user_task = "implement the actual user request"
             store = InMemoryTapeStore()
             thread_service = CapturingThreadService()
-            runtime = BubCodexRuntime(store, thread_service)
-            result = await runtime.context_kernel.ensure_thread_context(
+            kernel = RuntimeContextKernel(store, thread_service)
+            result = await kernel.ensure_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -228,8 +228,8 @@ class ContextMaterializationTest(unittest.TestCase):
                     anchor_id="anchor-1",
                 )
             )
-            runtime = BubCodexRuntime(store, CapturingThreadService())
-            return await runtime.context_kernel.ensure_thread_context(
+            kernel = RuntimeContextKernel(store, CapturingThreadService())
+            return await kernel.ensure_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -265,8 +265,8 @@ class ContextMaterializationTest(unittest.TestCase):
                     ),
                 ]
             )
-            runtime = BubCodexRuntime(store, CapturingThreadService())
-            return await runtime.context_kernel.ensure_thread_context(
+            kernel = RuntimeContextKernel(store, CapturingThreadService())
+            return await kernel.ensure_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -282,8 +282,8 @@ class ContextMaterializationTest(unittest.TestCase):
     def test_runtime_returns_materialization_failed_state_without_thread_id(self) -> None:
         async def run():
             store = InMemoryTapeStore()
-            runtime = BubCodexRuntime(store, FailingThreadService())
-            return await runtime.context_kernel.ensure_thread_context(
+            kernel = RuntimeContextKernel(store, FailingThreadService())
+            return await kernel.ensure_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -308,9 +308,6 @@ class CapturingThreadService:
     def resume_thread(self, thread_id: str) -> None:
         pass
 
-    def run_turn(self, *, thread_id: str, cwd: str, prompt: str):
-        raise AssertionError("not used")
-
 
 class FailingThreadService:
     def materialize_thread(self, *, cwd: str, anchor_id: str) -> ThreadMaterialization:
@@ -318,9 +315,6 @@ class FailingThreadService:
 
     def resume_thread(self, thread_id: str) -> None:
         pass
-
-    def run_turn(self, *, thread_id: str, cwd: str, prompt: str):
-        raise AssertionError("not used")
 
 
 if __name__ == "__main__":
