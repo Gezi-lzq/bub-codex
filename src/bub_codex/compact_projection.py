@@ -18,96 +18,110 @@ def project_compaction_events(
     reason: str = "user_requested",
     source: str = "sdk_stream:user_turn",
 ) -> list[TapeEvent]:
-    """Project Codex compaction notifications into a new Anchor bound to the same thread."""
+    """Project Codex compaction notifications into Anchors bound to the same thread."""
 
     events: list[TapeEvent] = []
     for record in records:
-        if record.get("method") != "item/completed":
-            continue
-        payload = record.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        item = payload.get("item")
-        if not isinstance(item, dict) or item.get("type") != "contextCompaction":
-            continue
-
-        source_id = record_event_id(record, kind="codex.thread.compacted", source=source)
-        anchor_creation_id = _stable_id("anchor_creation", source_id)
-        anchor_id = _stable_id("anchor", source_id)
-        common = {
-            "session_id": session_id,
-            "tape_id": tape_id,
-            "thread_id": record_thread_id(record),
-            "turn_id": record_turn_id(record),
-            "occurred_at": str(record.get("ts")) if record.get("ts") is not None else None,
-        }
-
-        events.append(
-            make_tape_event(
-                "bub.anchor.creation.started",
-                payload={
-                    "anchor_creation_id": anchor_creation_id,
-                    "method": "compact",
-                    "initiator": initiator,
-                    "reason": reason,
-                    "active_thread_id_before": record_thread_id(record),
-                    "source_fact_id": source_id,
-                },
-                **common,
-            )
-        )
-
-        events.append(
-            make_tape_event(
-                "codex.thread.compacted",
-                payload={
-                    "anchor_creation_id": anchor_creation_id,
-                    "trigger": _compact_trigger(initiator, reason),
-                    "source_fact_id": source_id,
-                },
-                **common,
-            )
-        )
-
-        events.append(
-            make_tape_event(
-                "bub.anchor.created",
-                payload={
-                    "anchor_id": anchor_id,
-                    "method": "compact",
-                    "reason": reason,
-                    "created_at": common["occurred_at"],
-                    "state": {
-                        "summary": None,
-                        "summary_status": "unavailable",
-                    },
-                    "refs": {
-                        "source_anchor_creation_id": anchor_creation_id,
-                        "thread_id": record_thread_id(record),
-                        "turn_id": record_turn_id(record),
-                        "source_fact_id": source_id,
-                    },
-                    "initiator": initiator,
-                },
-                anchor_id=anchor_id,
-                **common,
-            )
-        )
-        events.append(
-            _compact_continuity_binding_event(
+        events.extend(
+            project_compaction_record(
+                record,
                 session_id=session_id,
                 tape_id=tape_id,
-                anchor_id=anchor_id,
-                thread_id=record_thread_id(record),
-                previous_thread_id=record_thread_id(record),
-                anchor_creation_id=anchor_creation_id,
-                source_fact_id=source_id,
-                turn_id=record_turn_id(record),
-                occurred_at=common["occurred_at"],
+                initiator=initiator,
+                reason=reason,
+                source=source,
             )
         )
-
     return events
+
+
+def project_compaction_record(
+    record: JsonObject,
+    *,
+    session_id: str,
+    tape_id: str,
+    initiator: str = "bub_runtime",
+    reason: str = "user_requested",
+    source: str = "sdk_stream:user_turn",
+) -> tuple[TapeEvent, ...]:
+    """Project one Codex compaction notification into continuity tape events."""
+
+    if record.get("method") != "item/completed":
+        return ()
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return ()
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("type") != "contextCompaction":
+        return ()
+
+    source_id = record_event_id(record, kind="codex.thread.compacted", source=source)
+    anchor_creation_id = _stable_id("anchor_creation", source_id)
+    anchor_id = _stable_id("anchor", source_id)
+    common = {
+        "session_id": session_id,
+        "tape_id": tape_id,
+        "thread_id": record_thread_id(record),
+        "turn_id": record_turn_id(record),
+        "occurred_at": str(record.get("ts")) if record.get("ts") is not None else None,
+    }
+
+    return (
+        make_tape_event(
+            "bub.anchor.creation.started",
+            payload={
+                "anchor_creation_id": anchor_creation_id,
+                "method": "compact",
+                "initiator": initiator,
+                "reason": reason,
+                "active_thread_id_before": record_thread_id(record),
+                "source_fact_id": source_id,
+            },
+            **common,
+        ),
+        make_tape_event(
+            "codex.thread.compacted",
+            payload={
+                "anchor_creation_id": anchor_creation_id,
+                "trigger": _compact_trigger(initiator, reason),
+                "source_fact_id": source_id,
+            },
+            **common,
+        ),
+        make_tape_event(
+            "bub.anchor.created",
+            payload={
+                "anchor_id": anchor_id,
+                "method": "compact",
+                "reason": reason,
+                "created_at": common["occurred_at"],
+                "state": {
+                    "summary": None,
+                    "summary_status": "unavailable",
+                },
+                "refs": {
+                    "source_anchor_creation_id": anchor_creation_id,
+                    "thread_id": record_thread_id(record),
+                    "turn_id": record_turn_id(record),
+                    "source_fact_id": source_id,
+                },
+                "initiator": initiator,
+            },
+            anchor_id=anchor_id,
+            **common,
+        ),
+        _compact_continuity_binding_event(
+            session_id=session_id,
+            tape_id=tape_id,
+            anchor_id=anchor_id,
+            thread_id=record_thread_id(record),
+            previous_thread_id=record_thread_id(record),
+            anchor_creation_id=anchor_creation_id,
+            source_fact_id=source_id,
+            turn_id=record_turn_id(record),
+            occurred_at=common["occurred_at"],
+        ),
+    )
 
 
 def _compact_trigger(initiator: str, reason: str) -> str:
