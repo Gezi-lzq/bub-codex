@@ -137,13 +137,14 @@ class BubPluginPackageTest(unittest.TestCase):
 
         self.assertIsNone(decision)
 
-    def test_comma_handoff_records_anchor_in_codex_runtime_tape(self) -> None:
+    def test_comma_handoff_only_delegates_to_bub_builtin_agent(self) -> None:
         store = InMemoryTapeStore()
         runtime = FakeRuntimeStreamService(tape_store=store)
         plugin = BubCodexPlugin(runtime)
+        agent = FakeAgent("anchor added: handoff")
         state = {
             "_runtime_workspace": str(ROOT),
-            "_runtime_agent": FakeAgent("anchor added: handoff"),
+            "_runtime_agent": agent,
         }
 
         stream = asyncio.run(
@@ -157,11 +158,10 @@ class BubPluginPackageTest(unittest.TestCase):
         events = asyncio.run(store.events(session_id="s1", tape_id=default_tape_id("s1", state)))
 
         self.assertEqual(text, "anchor added: handoff")
-        self.assertEqual([event.type for event in events], ["bub.anchor.creation.started", "bub.anchor.created"])
-        self.assertEqual(events[-1].payload["reason"], "handoff")
-        self.assertEqual(events[-1].payload["state"]["summary"], "new context")
+        self.assertEqual(agent.calls, [("s1", ',tape.handoff name=handoff summary="new context"', state)])
+        self.assertEqual(events, [])
 
-    def test_lazy_runtime_comma_handoff_records_anchor_without_building_codex_runtime(self) -> None:
+    def test_lazy_runtime_comma_command_does_not_build_codex_runtime(self) -> None:
         framework_store = FakeRepublicTapeStore()
         framework = SimpleNamespace(workspace=ROOT, get_tape_store=lambda: framework_store)
         plugin = create_plugin(framework)
@@ -186,14 +186,9 @@ class BubPluginPackageTest(unittest.TestCase):
             )
             text = asyncio.run(_collect_text(stream))
 
-        events = asyncio.run(
-            RepublicTapeStoreAdapter(framework_store).events(session_id="s1", tape_id=default_tape_id("s1", state))
-        )
         self.assertEqual(text, "anchor added: handoff")
         self.assertEqual(built_services, [])
         self.assertTrue(framework_store.closed)
-        self.assertEqual([event.type for event in events], ["bub.anchor.creation.started", "bub.anchor.created"])
-        self.assertEqual(events[-1].payload["state"]["summary"], "first command")
 
     def test_lazy_runtime_closes_active_tape_store_after_non_handoff_comma_command(self) -> None:
         framework_store = FakeRepublicTapeStore()

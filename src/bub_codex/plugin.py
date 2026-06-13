@@ -7,8 +7,6 @@ not call Codex SDK methods, decide thread state, or project tape events.
 from __future__ import annotations
 
 import inspect
-import shlex
-from dataclasses import dataclass
 from typing import Any
 
 from republic import AsyncStreamEvents
@@ -19,14 +17,7 @@ from bub.types import State
 
 from .config import load_settings
 from .runtime_services import LazyRuntimeStreamService, RuntimeStreamService, UnconfiguredRuntimeStreamService
-from .stream_utils import default_tape_id, prompt_text, stream_text
-from .new_thread_materialization import create_new_thread_anchor_events
-
-
-@dataclass(frozen=True, slots=True)
-class CommaCommand:
-    name: str
-    args: list[str]
+from .stream_utils import stream_text
 
 
 def create_plugin(framework: Any) -> "BubCodexPlugin":
@@ -77,7 +68,6 @@ async def _run_comma_command(
         result = agent.run(session_id=session_id, prompt=prompt, state=state)
         if inspect.isawaitable(result):
             result = await result
-        await _record_handoff_anchor(prompt, session_id=session_id, state=state, runtime=runtime)
         return stream_text(str(result))
     finally:
         await _close_current_tape_store(runtime)
@@ -99,30 +89,6 @@ def _comma_command_agent(state: State) -> Any | None:
     return agent if callable(run) else None
 
 
-async def _record_handoff_anchor(prompt: str | list[dict], *, session_id: str, state: State, runtime: RuntimeStreamService) -> None:
-    if not isinstance(prompt, str):
-        return
-    command = _parse_comma_command(prompt)
-    if command is None or command.name not in {"tape.handoff", "tape_handoff"}:
-        return
-    tape_store = runtime.current_tape_store()
-    if tape_store is None:
-        return
-    tape_id = default_tape_id(session_id, state)
-    existing_events = await tape_store.events(session_id=session_id, tape_id=tape_id)
-    anchor_creation = create_new_thread_anchor_events(
-        existing_events,
-        session_id=session_id,
-        tape_id=tape_id,
-        reason="handoff",
-        intent=prompt_text(prompt),
-        summary=_handoff_summary(command.args),
-        owner="assistant",
-        initiator="bub_builtin_command",
-    )
-    await tape_store.append_many((anchor_creation.started, anchor_creation.created))
-
-
 async def _close_current_tape_store(runtime: RuntimeStreamService) -> None:
     tape_store = runtime.current_tape_store()
     if tape_store is None:
@@ -133,34 +99,6 @@ async def _close_current_tape_store(runtime: RuntimeStreamService) -> None:
     result = close()
     if inspect.isawaitable(result):
         await result
-
-
-def _parse_comma_command(prompt: str) -> CommaCommand | None:
-    try:
-        words = shlex.split(prompt.strip()[1:].strip())
-    except ValueError:
-        return None
-    if not words:
-        return None
-    return CommaCommand(name=words[0], args=words[1:])
-
-
-def _handoff_summary(args: list[str]) -> str | None:
-    values: dict[str, str] = {}
-    positional: list[str] = []
-    for token in args:
-        if "=" in token:
-            key, value = token.split("=", 1)
-            values[key] = value
-        else:
-            positional.append(token)
-    summary = values.get("summary")
-    if summary:
-        return summary
-    if positional:
-        return " ".join(positional)
-    name = values.get("name")
-    return name if name else None
 
 
 def _admit_decision(action: str, *, reason: str | None = None) -> Any:

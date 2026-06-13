@@ -164,10 +164,10 @@ Bub 的用户输入有两种进入 Codex 的方式：
 这条线应该由 `BubTurnRunner` 编排。`CodexManager` 只负责调用 Codex SDK 的
 thread/turn/steer 能力。
 
-Bub comma commands 不进入这条线。`,help`、`,tape.handoff` 等仍委托给 Bub builtin agent；
-只有 handoff 这类会改变 continuity 的命令，在 Bub 有 active tape store 时由
-`bub-codex` 记录 Anchor，下一轮普通 chat turn 再按 tape-first 规则创建和绑定新 Codex
-thread。
+Bub comma commands 不进入这条线。`,help`、`,tape.handoff` 等都委托给 Bub
+builtin agent。handoff 这类会改变 continuity 的命令由 Bub 自己的 tool 流程写入原生
+Anchor；下一轮普通 chat turn 再由 `bub-codex` 按 tape-first 规则读取最新 Anchor，
+创建并绑定新 Codex thread。
 
 ### 3. Codex notification 转成 Bub 输出
 

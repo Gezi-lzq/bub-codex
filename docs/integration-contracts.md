@@ -306,14 +306,14 @@ the startup context hash in `bub.context.materialized.input_sha256`. The Codex
 thread creation call does not receive this text. The runtime wraps it into the
 first real user turn only; resumed turns send the raw user prompt.
 
-`RuntimeStreamService.current_tape_store()` is the plugin-facing port for
-comma-command handoff recording. `LazyRuntimeStreamService` resolves the active
-Bub tape store directly for comma handoff and does not start a Codex SDK runtime
-for that path. Normal model turns build a Codex runtime per Bub turn and close
-it after the stream is consumed. Continuity comes from tape Anchors and
-`codex.thread.bound`, not from an in-process Codex client cache. If Bub has no
-active tape store, comma handoff delegation still runs, but no bub-codex Anchor
-is recorded.
+`RuntimeStreamService.current_tape_store()` is used only for lifecycle cleanup
+after comma-command delegation. `LazyRuntimeStreamService` does not start a
+Codex SDK runtime for comma commands. User comma commands, including
+`,tape.handoff`, are delegated to Bub's builtin agent; Bub's normal tool flow is
+responsible for writing native Anchors. Normal model turns build a Codex runtime
+per Bub turn and close it after the stream is consumed. Continuity comes from
+tape Anchors and `codex.thread.bound`, not from an in-process Codex client
+cache.
 
 ## Extension Boundaries
 
