@@ -70,7 +70,7 @@ async def _run_comma_command(
             result = await result
         return stream_text(str(result))
     finally:
-        await _close_current_tape_store(runtime)
+        await runtime.close_current_tape_store()
 
 
 def _is_comma_command(prompt: str | list[dict]) -> bool:
@@ -87,18 +87,6 @@ def _comma_command_agent(state: State) -> Any | None:
     agent = state.get("_runtime_agent")
     run = getattr(agent, "run", None)
     return agent if callable(run) else None
-
-
-async def _close_current_tape_store(runtime: RuntimeStreamService) -> None:
-    tape_store = runtime.current_tape_store()
-    if tape_store is None:
-        return
-    close = getattr(tape_store, "close", None)
-    if not callable(close):
-        return
-    result = close()
-    if inspect.isawaitable(result):
-        await result
 
 
 def _admit_decision(action: str, *, reason: str | None = None) -> Any:

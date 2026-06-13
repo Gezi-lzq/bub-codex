@@ -306,8 +306,8 @@ the startup context hash in `bub.context.materialized.input_sha256`. The Codex
 thread creation call does not receive this text. The runtime wraps it into the
 first real user turn only; resumed turns send the raw user prompt.
 
-`RuntimeStreamService.current_tape_store()` is used only for lifecycle cleanup
-after comma-command delegation. `LazyRuntimeStreamService` does not start a
+`RuntimeStreamService.close_current_tape_store()` is the plugin-facing lifecycle
+hook after comma-command delegation. `LazyRuntimeStreamService` does not start a
 Codex SDK runtime for comma commands. User comma commands, including
 `,tape.handoff`, are delegated to Bub's builtin agent; Bub's normal tool flow is
 responsible for writing native Anchors. Normal model turns build a Codex runtime
@@ -329,7 +329,8 @@ SDK or Bub details through the codebase:
 - `tool_projection` for new tool item types.
 - `compact_projection` only when Codex produces a real compaction notification
   that the current runtime uses.
-- `BubToolRuntimeContext` for new fields passed to Bub tools.
+- `BubDynamicToolBridge` for dynamic tool specs, server requests, and fields
+  passed to Bub tools.
 
 Do not add speculative event fields or modules for SDK behavior that is not
 produced by the current adapter or required by a current workflow.

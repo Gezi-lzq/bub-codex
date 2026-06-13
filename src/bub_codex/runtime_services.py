@@ -17,11 +17,11 @@ from bub.types import State
 
 from .codex_thread_service import CodexManager
 from .config import BubCodexSettings, load_settings
-from .bub_tools import BubToolRuntimeContext, build_bub_dynamic_tool_provider
+from .bub_tools import build_bub_dynamic_tool_bridge
 from .republic_tape_store import RepublicTapeStoreAdapter
 from .runtime_context import RuntimeContextKernel
 from .stream_utils import stream_text
-from .tape_store import InMemoryTapeStore, TapeStore
+from .tape_store import InMemoryTapeStore, TapeStore, close_tape_store
 
 
 class RuntimeStreamService(Protocol):
@@ -34,7 +34,7 @@ class RuntimeStreamService(Protocol):
     ) -> AsyncStreamEvents:
         ...
 
-    def current_tape_store(self) -> TapeStore | None:
+    async def close_current_tape_store(self) -> None:
         ...
 
 
@@ -55,7 +55,7 @@ class UnconfiguredRuntimeStreamService:
             error={"kind": "unknown", "message": self.message},
         )
 
-    def current_tape_store(self) -> TapeStore | None:
+    async def close_current_tape_store(self) -> None:
         return None
 
 
@@ -102,13 +102,16 @@ class LazyRuntimeStreamService:
     async def close(self) -> None:
         await self._close_cached_runtime()
 
-    def current_tape_store(self) -> TapeStore | None:
+    def _current_tape_store(self) -> TapeStore | None:
         if not self.settings.use_bub_tape_store:
             return None
         active_store = active_bub_tape_store(self.framework)
         if active_store is None:
             return None
         return RepublicTapeStoreAdapter(active_store)
+
+    async def close_current_tape_store(self) -> None:
+        await close_tape_store(self._current_tape_store())
 
     def _build_runtime(self) -> RuntimeStreamService:
         return build_runtime_stream_service(self.framework, settings=self.settings)
@@ -169,15 +172,12 @@ def build_runtime_stream_service(
         env=dict(settings.env) or None,
         experimental_api=True,
     )
-    tool_runtime_context = BubToolRuntimeContext()
-    dynamic_tool_provider = build_bub_dynamic_tool_provider(
+    dynamic_tool_bridge = build_bub_dynamic_tool_bridge(
         _model_visible_bub_tools(settings.bub_tools),
-        context_factory=tool_runtime_context.context_for_call,
-        awaitable_resolver=tool_runtime_context.resolve_awaitable,
     )
     client = codex_client_factory(
         config=client_config,
-        approval_handler=dynamic_tool_provider.dispatcher.handle_server_request,
+        approval_handler=dynamic_tool_bridge.handle_server_request,
     )
     client.start()
     client.initialize()
@@ -187,14 +187,14 @@ def build_runtime_stream_service(
         cwd=str(workspace),
         approval_policy=settings.approval_policy,
         sandbox=settings.sandbox,
-        dynamic_tools=dynamic_tool_provider.specs,
+        dynamic_tools=dynamic_tool_bridge.specs,
     )
     context_kernel = RuntimeContextKernel(tape_store, codex_threads)
     return BubCodexLiveRuntimeStreamService(
         context_kernel,
         tape_store,
         codex_threads,
-        tool_runtime_context=tool_runtime_context,
+        tool_runtime_context=dynamic_tool_bridge,
     )
 
 

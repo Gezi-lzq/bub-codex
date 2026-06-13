@@ -51,7 +51,7 @@ turn lifecycle、输入转发、stream、trace 或 continuity 行为。
 
 3. 只为真实差异建抽象。
    Bub 和 Codex identity 不同，所以需要 `CodexThreadBindingResolver`。
-   Codex server request 和 Bub tool context 不同，所以需要 `BubToolBridge`。
+   Codex server request 和 Bub tool context 不同，所以需要 `BubDynamicToolBridge`。
    CodexNotification 和 Bub output 不同，所以需要 `BubCodexNotificationTranslator`。
 
 4. 不为中间步骤制造领域模型。
@@ -139,7 +139,7 @@ Bub tools 通过 Codex dynamic tools 暴露给模型。
 - 为 Bub tool call 注入精确的 `(thread_id, turn_id)` runtime context；
 - 处理 command/file approvals。
 
-这条线应该集中在 `BubToolBridge` 及其 Codex SDK wrapper 连接处，不应该进入
+这条线应该集中在 `BubDynamicToolBridge` 及其 Codex SDK wrapper 连接处，不应该进入
 notification 到 tape/stream 的转换逻辑。
 
 Codex notification 中可能出现 `dynamicToolCall` item，但那只是已经发生的 tool trace；
@@ -298,7 +298,7 @@ RuntimeContextKernel
 
 BubTurnRunner
   -> 接收 Bub input / steer input
-  -> 从 RuntimeContextKernel 获取 executable context
+  -> 从 RuntimeContextKernel 获取 turn context
   -> 消费 CodexNotification
   -> 调 BubCodexNotificationTranslator
   -> append tape / yield stream
@@ -306,7 +306,7 @@ BubTurnRunner
 BubCodexNotificationTranslator
   -> 只做 translate/map，不做 IO
 
-BubToolBridge
+BubDynamicToolBridge
   -> Bub tools <-> Codex dynamic tools / server requests
 ```
 
@@ -326,7 +326,7 @@ Codex SDK：thread、turn、turn-scoped notification stream，以及 steer/close
 - steer 当前 active turn；
 - 关闭 turn notification subscription 和 runtime resources；
 - 在 thread start 时挂载 Bub custom tools 对应的 Codex dynamic tools；
-- 将 Codex server requests 转发给 BubToolBridge。
+- 将 Codex server requests 转发给 BubDynamicToolBridge。
 
 它不应该知道 Bub tape、Bub Anchor，或者用户可见 stream 语义。
 
@@ -416,7 +416,7 @@ TapeStore，但不运行 user turn，不消费 notification，也不产出 strea
 职责：
 
 - 在 turn 开始前解析 Bub session、tape id、workspace；
-- 调用 `RuntimeContextKernel` 得到 executable context 或 context-unavailable error；
+- 调用 `RuntimeContextKernel` 得到 turn context 或 context-unavailable error；
 - 通过 `CodexManager` 启动 Codex turn；
 - 将 steering messages 送入 active Codex turn；
 - 将每个 Codex notification 交给 `BubCodexNotificationTranslator`；
@@ -486,7 +486,7 @@ class NotificationTranslation:
 如果未来出现无法用 tape/stream/exception 表达的 runner-only 控制需求，再引入一个具体命名的
 内部信号类型。不要提前引入泛化的 `RuntimeEvent`。
 
-### BubToolBridge
+### BubDynamicToolBridge
 
 负责 Codex server-request plane，包括 approvals 和 dynamic tools。
 
@@ -818,7 +818,7 @@ translator 只拥有保证 stream 语义正确所需的 turn-local 状态：
 - 不要让 `BubCodexNotificationTranslator` 执行 IO。
 - 不要让 `CodexManager` 产出 Bub 对象。
 - 不要让 Bub tape 或 Anchor 逻辑泄漏进 Codex control plane。
-- dynamic tools 和 approval handling 放在 `BubToolBridge` 中，不放进 notification translator。
+- dynamic tools 和 approval handling 放在 `BubDynamicToolBridge` 中，不放进 notification translator。
 - 尽可能在 mapping 前过滤 foreign thread 或 foreign turn notifications。
 - projection 保持 value based。只有存在真实 Bub consumer 时，translator 才应该产出 Bub 输出。
 - 不要把 observed SDK error notification 直接当作 stream failure；stream failure 来自 runner

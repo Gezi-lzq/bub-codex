@@ -181,7 +181,7 @@ class ContextMaterializationTest(unittest.TestCase):
             store = InMemoryTapeStore()
             thread_service = CapturingThreadService()
             kernel = RuntimeContextKernel(store, thread_service)
-            result = await kernel.ensure_thread_context(
+            result = await kernel.start_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -229,7 +229,7 @@ class ContextMaterializationTest(unittest.TestCase):
                 )
             )
             kernel = RuntimeContextKernel(store, CapturingThreadService())
-            return await kernel.ensure_thread_context(
+            return await kernel.start_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -266,7 +266,7 @@ class ContextMaterializationTest(unittest.TestCase):
                 ]
             )
             kernel = RuntimeContextKernel(store, CapturingThreadService())
-            return await kernel.ensure_thread_context(
+            return await kernel.start_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",
@@ -283,7 +283,7 @@ class ContextMaterializationTest(unittest.TestCase):
         async def run():
             store = InMemoryTapeStore()
             kernel = RuntimeContextKernel(store, FailingThreadService())
-            return await kernel.ensure_thread_context(
+            return await kernel.start_thread_context(
                 session_id="s1",
                 tape_id="s1",
                 cwd="/workspace",

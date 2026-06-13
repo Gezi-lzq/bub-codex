@@ -25,7 +25,7 @@ from .runtime_diagnostics import runtime_error_event
 from .startup_context import prompt_with_startup_context
 from .stream_utils import default_tape_id, prompt_text as extract_prompt_text
 from .json_utils import JsonObject
-from .tape_store import TapeStore
+from .tape_store import TapeStore, close_tape_store
 from .notification_translator import BubCodexNotificationTranslator, stream_error_events
 
 
@@ -103,8 +103,8 @@ class BubCodexLiveRuntimeStreamService:
             if inspect.isawaitable(result):
                 await result
 
-    def current_tape_store(self) -> TapeStore | None:
-        return self.tape_store
+    async def close_current_tape_store(self) -> None:
+        await close_tape_store(self.tape_store)
 
     def set_tape_store(self, tape_store: TapeStore) -> None:
         self.tape_store = tape_store
@@ -132,7 +132,7 @@ class BubCodexLiveRuntimeStreamService:
         )
 
         try:
-            context = await self.context_kernel.ensure_executable_context(
+            context = await self.context_kernel.resolve_turn_context(
                 session_id=session_id,
                 tape_id=tape_id,
                 cwd=cwd,

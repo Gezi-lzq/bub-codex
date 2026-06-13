@@ -604,17 +604,18 @@ class FakeRuntimeStreamService:
     async def run_stream(self, *, prompt, session_id, state):
         return stream_text(self.text)
 
-    def current_tape_store(self):
-        return self.tape_store
+    async def close_current_tape_store(self) -> None:
+        close = getattr(self.tape_store, "close", None)
+        if callable(close):
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
 
     def set_tape_store(self, tape_store) -> None:
         self.tape_store = tape_store
 
     def close(self) -> None:
         self.closed = True
-
-    def current_tape_store(self):
-        return self.tape_store
 
 
 class FakeRepublicTapeStore:

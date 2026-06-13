@@ -127,7 +127,7 @@ class RuntimeContextKernel:
     codex_threads: CodexThreadContextAdapter
     thread_binding_resolver: CodexThreadBindingResolver = field(default_factory=CodexThreadBindingResolver)
 
-    async def ensure_executable_context(
+    async def resolve_turn_context(
         self,
         *,
         session_id: str,
@@ -136,7 +136,7 @@ class RuntimeContextKernel:
         intent: str,
         workspace_metadata: JsonObject | None = None,
     ) -> RuntimeContext:
-        start = await self.ensure_thread_context(
+        start = await self.start_thread_context(
             session_id=session_id,
             tape_id=tape_id,
             cwd=cwd,
@@ -164,7 +164,7 @@ class RuntimeContextKernel:
             start=start,
         )
 
-    async def ensure_thread_context(
+    async def start_thread_context(
         self,
         *,
         session_id: str,

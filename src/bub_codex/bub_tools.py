@@ -53,6 +53,65 @@ class BubDynamicToolProvider:
 
 
 @dataclass(frozen=True, slots=True)
+class BubDynamicToolBridge:
+    """Runtime-facing bundle for Codex dynamic Bub tools."""
+
+    runtime_context: "BubToolRuntimeContext"
+    provider: BubDynamicToolProvider
+
+    @property
+    def specs(self) -> tuple[DynamicToolSpec, ...]:
+        return self.provider.specs
+
+    def handle_server_request(self, method: str, params: JsonObject | None) -> JsonObject:
+        return self.provider.dispatcher.handle_server_request(method, params)
+
+    def bind_event_loop(self, event_loop: asyncio.AbstractEventLoop) -> None:
+        self.runtime_context.bind_event_loop(event_loop)
+
+    def update(
+        self,
+        *,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: JsonObject | None = None,
+    ) -> None:
+        self.runtime_context.update(
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=anchor_id,
+            state=state,
+        )
+
+    def register_turn_context(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str | None,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: JsonObject | None = None,
+    ) -> None:
+        self.runtime_context.register_turn_context(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=anchor_id,
+            state=state,
+        )
+
+    def clear_turn_context(self, *, thread_id: str, turn_id: str | None) -> None:
+        self.runtime_context.clear_turn_context(thread_id=thread_id, turn_id=turn_id)
+
+
+@dataclass(frozen=True, slots=True)
 class BubToolCallContext:
     session_id: str
     tape_id: str
@@ -223,6 +282,21 @@ def build_bub_dynamic_tool_provider(
         specs=tuple(specs),
         dispatcher=DynamicToolDispatcher(handlers),
     )
+
+
+def build_bub_dynamic_tool_bridge(
+    tools: Iterable[BubToolLike],
+    *,
+    namespace: str = BUB_DYNAMIC_TOOL_NAMESPACE,
+) -> BubDynamicToolBridge:
+    runtime_context = BubToolRuntimeContext()
+    provider = build_bub_dynamic_tool_provider(
+        tools,
+        namespace=namespace,
+        context_factory=runtime_context.context_for_call,
+        awaitable_resolver=runtime_context.resolve_awaitable,
+    )
+    return BubDynamicToolBridge(runtime_context=runtime_context, provider=provider)
 
 
 def _is_executable_tool(tool: BubToolLike) -> bool:

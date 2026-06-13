@@ -6,6 +6,7 @@ Republic-specific storage behavior belongs in `republic_tape_store.py`.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Iterable, Protocol
 
@@ -23,6 +24,17 @@ class TapeStore(Protocol):
 
     async def events(self, *, session_id: str | None = None, tape_id: str | None = None) -> list[TapeEvent]:
         ...
+
+
+async def close_tape_store(tape_store: TapeStore | None) -> None:
+    if tape_store is None:
+        return
+    close = getattr(tape_store, "close", None)
+    if not callable(close):
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 @dataclass(slots=True)
