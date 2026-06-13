@@ -199,6 +199,11 @@ store, Bub records a new Anchor. On the next normal chat turn, `bub-codex`
 resolves that latest Anchor, prepares startup context, creates a new Codex
 thread, and writes the new `codex.thread.bound` event to tape.
 
+Codex dynamic tool calls are scoped by app-server `threadId` and `turnId`.
+`bub-codex` registers Bub tool context when a Codex turn starts and clears it
+when the turn finishes. A dynamic tool request with missing or unknown ids fails
+instead of using the most recent Bub turn state.
+
 ## Review Rules
 
 Before large changes, check these invariants:

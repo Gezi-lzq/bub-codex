@@ -89,12 +89,13 @@ class FakeTurnStreamService:
             )
             yield turn_completed(thread_id=thread_id, turn_id=turn_id)
 
-        return StreamRecordsTurnSession(records())
+        return StreamRecordsTurnSession(records(), turn_id="user-turn-1")
 
 
 @dataclass(slots=True)
 class StreamRecordsTurnSession:
     iterator: Any
+    turn_id: str | None = None
     closed: bool = False
     steered: list[str] = field(default_factory=list)
 
@@ -150,7 +151,7 @@ class DeltaTurnStreamService:
             )
             yield turn_completed(thread_id=thread_id, turn_id=turn_id)
 
-        return StreamRecordsTurnSession(records())
+        return StreamRecordsTurnSession(records(), turn_id="user-turn-1")
 
 
 class ForeignThreadTurnStreamService:
@@ -225,6 +226,26 @@ class SessionTurnStreamService:
 
     def start_turn_stream(self, *, thread_id: str, cwd: str, prompt: str):
         return self.session
+
+
+@dataclass(slots=True)
+class RecordingToolRuntimeContext:
+    updates: list[dict[str, Any]] = field(default_factory=list)
+    registered: list[dict[str, Any]] = field(default_factory=list)
+    cleared: list[dict[str, Any]] = field(default_factory=list)
+    loop_bound: bool = False
+
+    def bind_event_loop(self, event_loop) -> None:
+        self.loop_bound = event_loop.is_running()
+
+    def update(self, **kwargs) -> None:
+        self.updates.append(kwargs)
+
+    def register_turn_context(self, **kwargs) -> None:
+        self.registered.append(kwargs)
+
+    def clear_turn_context(self, **kwargs) -> None:
+        self.cleared.append(kwargs)
 
 
 class LiveStreamTest(unittest.TestCase):
@@ -624,6 +645,40 @@ class LiveStreamTest(unittest.TestCase):
         self.assertEqual(result.final_text, "Final answer.")
         self.assertIsNotNone(session)
         self.assertEqual(session.steered, ["please adjust course"])
+
+    def test_live_bridge_registers_and_clears_dynamic_tool_context_for_turn(self) -> None:
+        async def run():
+            store = InMemoryTapeStore()
+            runtime = BubCodexRuntime(store, FakeMaterializingThreadService())
+            tool_context = RecordingToolRuntimeContext()
+            live = BubCodexLiveRuntimeStreamService(
+                runtime.context_kernel,
+                store,
+                FakeTurnStreamService(),
+                tape_id_factory=_test_tape_id_factory,
+                tool_runtime_context=tool_context,
+            )
+            result = await run_plugin_stream_once(
+                live,
+                prompt="hello",
+                session_id="s1",
+                state={"_runtime_workspace": "/workspace", "state_key": "state-value"},
+                tape_store=store,
+            )
+            return result, tool_context
+
+        result, tool_context = asyncio.run(run())
+
+        self.assertEqual(result.final_text, "Final answer.")
+        bound_event = next(event for event in result.tape_events if event.type == "codex.thread.bound")
+        self.assertTrue(tool_context.loop_bound)
+        self.assertEqual(tool_context.registered[0]["thread_id"], "codex-thread-1")
+        self.assertEqual(tool_context.registered[0]["turn_id"], "user-turn-1")
+        self.assertEqual(tool_context.registered[0]["session_id"], "s1")
+        self.assertEqual(tool_context.registered[0]["tape_id"], "s1")
+        self.assertEqual(tool_context.registered[0]["anchor_id"], bound_event.anchor_id)
+        self.assertEqual(tool_context.registered[0]["state"]["state_key"], "state-value")
+        self.assertEqual(tool_context.cleared, [{"thread_id": "codex-thread-1", "turn_id": "user-turn-1"}])
 
     def test_live_bridge_records_runtime_error_when_turn_stream_fails(self) -> None:
         async def run():

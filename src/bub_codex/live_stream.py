@@ -64,6 +64,22 @@ class ToolRuntimeContext(Protocol):
     ) -> None:
         ...
 
+    def register_turn_context(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str | None,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: State,
+    ) -> None:
+        ...
+
+    def clear_turn_context(self, *, thread_id: str, turn_id: str | None) -> None:
+        ...
+
 
 @dataclass(slots=True)
 class BubCodexLiveRuntimeStreamService:
@@ -135,6 +151,7 @@ class BubCodexLiveRuntimeStreamService:
                 cwd=cwd,
                 prompt=prompt_text,
                 state=state,
+                tool_runtime_context=self.tool_runtime_context,
             ):
                 yield stream_event
 
@@ -151,6 +168,7 @@ async def _iter_live_turn_events(
     cwd: str,
     prompt: str,
     state: State,
+    tool_runtime_context: ToolRuntimeContext | None,
 ):
     translator = CodexTurnTranslator(
         session_id=session_id,
@@ -161,6 +179,16 @@ async def _iter_live_turn_events(
         thread_id=context.thread_id,
         cwd=cwd,
         prompt=prompt_with_startup_context(prompt=prompt, startup_context=context.start.startup_context),
+    )
+    turn_id = _turn_session_id(turn_session)
+    _register_tool_runtime_turn_context(
+        tool_runtime_context,
+        session_id=session_id,
+        tape_id=tape_id,
+        context=context,
+        cwd=cwd,
+        state=state,
+        turn_id=turn_id,
     )
     try:
         async for record in _iter_turn_records_with_steering(turn_session, state=state):
@@ -185,6 +213,11 @@ async def _iter_live_turn_events(
             yield to_stream_event(decision)
         return
     finally:
+        _clear_tool_runtime_turn_context(
+            tool_runtime_context,
+            thread_id=context.thread_id,
+            turn_id=turn_id,
+        )
         turn_session.close()
     for decision in translator.finish().stream_decisions:
         yield to_stream_event(decision)
@@ -280,3 +313,42 @@ def _bind_tool_runtime_loop(tool_runtime_context: ToolRuntimeContext | None) -> 
     bind = getattr(tool_runtime_context, "bind_event_loop", None)
     if callable(bind):
         bind(asyncio.get_running_loop())
+
+
+def _turn_session_id(turn_session: CodexTurnSession) -> str | None:
+    turn_id = getattr(turn_session, "turn_id", None)
+    return str(turn_id) if turn_id is not None else None
+
+
+def _register_tool_runtime_turn_context(
+    tool_runtime_context: ToolRuntimeContext | None,
+    *,
+    session_id: str,
+    tape_id: str,
+    context: ExecutableContext,
+    cwd: str,
+    state: State,
+    turn_id: str | None,
+) -> None:
+    register = getattr(tool_runtime_context, "register_turn_context", None)
+    if callable(register):
+        register(
+            thread_id=context.thread_id,
+            turn_id=turn_id,
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=context.anchor_id,
+            state=state,
+        )
+
+
+def _clear_tool_runtime_turn_context(
+    tool_runtime_context: ToolRuntimeContext | None,
+    *,
+    thread_id: str,
+    turn_id: str | None,
+) -> None:
+    clear = getattr(tool_runtime_context, "clear_turn_context", None)
+    if callable(clear):
+        clear(thread_id=thread_id, turn_id=turn_id)

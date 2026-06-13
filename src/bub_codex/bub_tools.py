@@ -52,6 +52,15 @@ class BubDynamicToolProvider:
     dispatcher: DynamicToolDispatcher
 
 
+@dataclass(frozen=True, slots=True)
+class BubToolCallContext:
+    session_id: str
+    tape_id: str
+    cwd: str
+    anchor_id: str | None
+    state: JsonObject
+
+
 @dataclass(slots=True)
 class BubToolRuntimeContext:
     """Mutable per-turn context used by Codex dynamic Bub tool calls."""
@@ -62,6 +71,7 @@ class BubToolRuntimeContext:
     anchor_id: str | None = None
     state: JsonObject = field(default_factory=dict)
     event_loop: asyncio.AbstractEventLoop | None = None
+    call_contexts: dict[tuple[str, str], BubToolCallContext] = field(default_factory=dict)
 
     def bind_event_loop(self, event_loop: asyncio.AbstractEventLoop) -> None:
         self.event_loop = event_loop
@@ -81,14 +91,40 @@ class BubToolRuntimeContext:
         self.anchor_id = anchor_id
         self.state = dict(state or {})
 
+    def register_turn_context(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str | None,
+        session_id: str,
+        tape_id: str,
+        cwd: str,
+        anchor_id: str | None,
+        state: JsonObject | None = None,
+    ) -> None:
+        context = BubToolCallContext(
+            session_id=session_id,
+            tape_id=tape_id,
+            cwd=cwd,
+            anchor_id=anchor_id,
+            state=dict(state or {}),
+        )
+        if turn_id is not None:
+            self.call_contexts[(thread_id, turn_id)] = context
+
+    def clear_turn_context(self, *, thread_id: str, turn_id: str | None) -> None:
+        if turn_id is not None:
+            self.call_contexts.pop((thread_id, turn_id), None)
+
     def context_for_call(self, call: DynamicToolCall) -> Any:
+        context = self._context_for_call(call)
         return make_bub_tool_context(
-            session_id=self.session_id,
-            tape_id=self.tape_id,
-            cwd=self.cwd,
+            session_id=context.session_id,
+            tape_id=context.tape_id,
+            cwd=context.cwd,
             call=call,
-            anchor_id=self.anchor_id,
-            extra_state=self.state,
+            anchor_id=context.anchor_id,
+            extra_state=context.state,
         )
 
     def resolve_awaitable(self, value: Any) -> Any:
@@ -104,6 +140,20 @@ class BubToolRuntimeContext:
                 return asyncio.run_coroutine_threadsafe(value, self.event_loop).result()
 
         return _resolve_awaitable(value)
+
+    def _context_for_call(self, call: DynamicToolCall) -> BubToolCallContext:
+        if call.thread_id is None or call.turn_id is None:
+            raise RuntimeError(
+                "Codex dynamic tool call is missing required app-server ids "
+                f"thread_id={call.thread_id!r} turn_id={call.turn_id!r}"
+            )
+        context = self.call_contexts.get((call.thread_id, call.turn_id))
+        if context is not None:
+            return context
+        raise RuntimeError(
+            "no Bub runtime context registered for Codex dynamic tool call "
+            f"thread_id={call.thread_id!r} turn_id={call.turn_id!r}"
+        )
 
 
 def make_bub_tool_context(

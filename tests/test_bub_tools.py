@@ -39,6 +39,15 @@ class BubDynamicToolsTest(unittest.TestCase):
             anchor_id="anchor-1",
             state={"_runtime_agent": "agent"},
         )
+        runtime_context.register_turn_context(
+            thread_id="thread-1",
+            turn_id="turn-1",
+            session_id="s1",
+            tape_id="tape-1",
+            cwd="/workspace",
+            anchor_id="anchor-1",
+            state={"_runtime_agent": "agent"},
+        )
         provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
 
         result = provider.dispatcher.handle_server_request(
@@ -76,6 +85,14 @@ class BubDynamicToolsTest(unittest.TestCase):
             runtime_context = BubToolRuntimeContext()
             runtime_context.bind_event_loop(loop)
             runtime_context.update(session_id="s1", tape_id="tape-1", cwd="/workspace", anchor_id="anchor-1")
+            runtime_context.register_turn_context(
+                thread_id="thread-1",
+                turn_id="turn-1",
+                session_id="s1",
+                tape_id="tape-1",
+                cwd="/workspace",
+                anchor_id="anchor-1",
+            )
             provider = build_bub_dynamic_tool_provider(
                 [tool],
                 context_factory=runtime_context.context_for_call,
@@ -102,6 +119,54 @@ class BubDynamicToolsTest(unittest.TestCase):
         self.assertEqual(result["contentItems"][0]["text"], "ok")
         self.assertEqual(calls, [True])
 
+    def test_dynamic_tool_context_is_selected_by_codex_thread_and_turn(self) -> None:
+        calls = []
+
+        def handler(*, context):
+            calls.append((context.tape, context.state["session_id"], context.state["_runtime_anchor_id"]))
+            return "ok"
+
+        tool = FakeTool(
+            name="tape.info",
+            description="Show tape info",
+            parameters={"type": "object", "properties": {}},
+            handler=handler,
+            context=True,
+        )
+        runtime_context = BubToolRuntimeContext()
+        runtime_context.register_turn_context(
+            thread_id="thread-1",
+            turn_id="turn-1",
+            session_id="s1",
+            tape_id="tape-1",
+            cwd="/workspace/one",
+            anchor_id="anchor-1",
+        )
+        runtime_context.register_turn_context(
+            thread_id="thread-2",
+            turn_id="turn-2",
+            session_id="s2",
+            tape_id="tape-2",
+            cwd="/workspace/two",
+            anchor_id="anchor-2",
+        )
+        provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
+
+        result = provider.dispatcher.handle_server_request(
+            "item/tool/call",
+            {
+                "callId": "call-1",
+                "namespace": "bub",
+                "tool": "tape_info",
+                "arguments": {},
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(calls, [("tape-1", "s1", "anchor-1")])
+
     def test_dynamic_tool_provider_accepts_run_only_bub_tools(self) -> None:
         tool = RunOnlyTool()
         provider = build_bub_dynamic_tool_provider([tool])
@@ -118,6 +183,32 @@ class BubDynamicToolsTest(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["contentItems"][0]["text"], "ran with verbose=True")
+
+    def test_dynamic_tool_handler_fails_when_runtime_context_is_not_registered(self) -> None:
+        tool = FakeTool(
+            name="tape.info",
+            description="Show tape info",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda *, context: "not reached",
+            context=True,
+        )
+        runtime_context = BubToolRuntimeContext()
+        provider = build_bub_dynamic_tool_provider([tool], context_factory=runtime_context.context_for_call)
+
+        result = provider.dispatcher.handle_server_request(
+            "item/tool/call",
+            {
+                "callId": "call-1",
+                "namespace": "bub",
+                "tool": "tape_info",
+                "arguments": {},
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+            },
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("no Bub runtime context registered", result["contentItems"][0]["text"])
 
 
 class FakeTool:

@@ -221,10 +221,15 @@ exclude_none=False)`. Downstream code receives plain JSON-like dictionaries.
 
 ## Codex Dynamic Tool Contract
 
-The generated `ThreadStartParams` model does not define `dynamicTools`. The
-Codex Python SDK also accepts raw JSON params and forwards them to the app
-server. `bub-codex` keeps that app-server extension isolated in
-`ThreadStartOptions`; no other module should build this payload directly.
+`dynamicTools` is an experimental app-server `thread/start` field. It is present
+in the Codex app-server experimental schema (`codex app-server
+generate-json-schema --experimental`) and omitted from the default stable schema.
+The pinned Codex Python SDK generated `ThreadStartParams` model also does not
+define `dynamicTools`. `bub-codex` therefore sets `experimental_api=True` during
+SDK initialization and sends this one field through raw JSON params.
+
+`bub-codex` keeps that app-server extension isolated in `ThreadStartOptions`; no
+other module should build this payload directly.
 
 The plugin registers Codex dynamic tools through raw `thread_start` params:
 
@@ -244,7 +249,10 @@ The plugin registers Codex dynamic tools through raw `thread_start` params:
 The SDK calls the approval handler with server-request methods. The plugin
 handles:
 
-- `item/tool/call`: dispatch to a registered Bub dynamic tool.
+- `item/tool/call`: dispatch to a registered Bub dynamic tool. App-server
+  `DynamicToolCallParams` requires `threadId` and `turnId`; Bub runtime context
+  is selected by the exact `(threadId, turnId)` pair. Missing or unknown ids
+  fail the tool call instead of falling back to the most recent Bub turn.
 - `item/commandExecution/requestApproval`: accept.
 - `item/fileChange/requestApproval`: accept.
 
