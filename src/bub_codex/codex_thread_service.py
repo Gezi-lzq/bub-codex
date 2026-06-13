@@ -162,8 +162,10 @@ def _iter_turn_records(client: CodexClientPort, *, turn_id: str, thread_id: str)
         }
         if not record_belongs_to_thread(record, thread_id):
             continue
+        if _is_other_turn_completed(record, turn_id):
+            continue
         yield record
-        if record["method"] == "turn/completed":
+        if _is_current_turn_completed(record, turn_id):
             break
 
 
@@ -177,3 +179,25 @@ def _notification_record(event: Any) -> JsonObject:
         "payload_type": type(raw_payload).__name__ if raw_payload is not None else None,
         "payload": payload,
     }
+
+
+def _is_current_turn_completed(record: JsonObject, turn_id: str) -> bool:
+    return _completed_turn_id(record) == turn_id
+
+
+def _is_other_turn_completed(record: JsonObject, turn_id: str) -> bool:
+    completed_turn_id = _completed_turn_id(record)
+    return completed_turn_id is not None and completed_turn_id != turn_id
+
+
+def _completed_turn_id(record: JsonObject) -> str | None:
+    if record.get("method") != "turn/completed":
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    turn = payload.get("turn")
+    if not isinstance(turn, dict):
+        return None
+    turn_id = turn.get("id")
+    return str(turn_id) if turn_id is not None else None

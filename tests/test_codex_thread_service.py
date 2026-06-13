@@ -51,6 +51,46 @@ class MaterializingCodexThreadServiceTest(unittest.TestCase):
         self.assertTrue(all(record["payload"]["threadId"] == "current-thread" for record in records))
         self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
 
+    def test_stream_records_ignore_same_thread_different_turn_completed_without_ending_current_turn(self) -> None:
+        client = FakeCodexClient(
+            [
+                _event(turn_started(thread_id="current-thread", turn_id="turn-1")),
+                _event(turn_completed(thread_id="current-thread", turn_id="other-turn")),
+                _event(
+                    agent_message_completed(
+                        thread_id="current-thread",
+                        turn_id="turn-1",
+                        phase="final_answer",
+                        text="current final",
+                    )
+                ),
+                _event(turn_completed(thread_id="current-thread", turn_id="turn-1")),
+            ]
+        )
+        service = MaterializingCodexThreadService(client, cwd="/workspace")
+
+        session = service.start_turn_stream(
+            thread_id="current-thread",
+            cwd="/workspace",
+            prompt="hello",
+        )
+        try:
+            records = list(session.records())
+        finally:
+            session.close()
+
+        self.assertEqual(
+            [record["method"] for record in records],
+            ["turn/started", "item/completed", "turn/completed"],
+        )
+        self.assertTrue(
+            all(
+                record["payload"].get("turn", {}).get("id") != "other-turn"
+                for record in records
+            )
+        )
+        self.assertEqual(client.unregistered_turn_ids, ["turn-1"])
+
     def test_turn_session_close_unregisters_notifications(self) -> None:
         client = FakeCodexClient(
             [
