@@ -56,6 +56,88 @@ class RepublicTapeStoreAdapterTest(unittest.TestCase):
         self.assertEqual(resolution.anchor_id, "anchor-1")
         self.assertEqual(resolution.thread_id, "thread-1")
 
+    def test_adapter_uses_native_republic_kinds_where_they_match_event_semantics(self) -> None:
+        tape_id = "session__codex"
+        with TemporaryDirectory() as tmp:
+            store = FileTapeStore(Path(tmp))
+            adapter = RepublicTapeStoreAdapter(store)
+
+            asyncio.run(
+                adapter.append_many(
+                    [
+                        make_tape_event(
+                            "bub.anchor.created",
+                            payload={"anchor_id": "anchor-1", "reason": "handoff", "state": {"summary": "done"}},
+                            session_id="session",
+                            tape_id=tape_id,
+                            anchor_id="anchor-1",
+                        ),
+                        make_tape_event(
+                            "codex.assistant_message.completed",
+                            payload={
+                                "assistant_text": "Done.",
+                                "phase": "final_answer",
+                            },
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                        make_tape_event(
+                            "codex.assistant_message.completed",
+                            payload={
+                                "assistant_text": "Looking.",
+                                "phase": "commentary",
+                            },
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                        make_tape_event(
+                            "codex.error.observed",
+                            payload={"message": "model failed", "raw_error": {"message": "model failed"}},
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                        make_tape_event(
+                            "bub.tool.call.started",
+                            payload={"tool_name": "bash", "input": {"cmd": "pwd"}},
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                        make_tape_event(
+                            "bub.tool.call.completed",
+                            payload={"tool_name": "bash", "output": "/workspace"},
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                        make_tape_event(
+                            "codex.thread.bound",
+                            payload={"thread_id": "thread-1"},
+                            session_id="session",
+                            tape_id=tape_id,
+                        ),
+                    ]
+                )
+            )
+
+            entries = store.read(tape_id)
+            events = asyncio.run(adapter.events(session_id="session", tape_id=tape_id))
+
+        self.assertEqual(
+            [entry.kind for entry in entries],
+            ["anchor", "message", "message", "error", "tool_call", "tool_result", "event"],
+        )
+        self.assertEqual(
+            [event.type for event in events],
+            [
+                "bub.anchor.created",
+                "codex.assistant_message.completed",
+                "codex.assistant_message.completed",
+                "codex.error.observed",
+                "bub.tool.call.started",
+                "bub.tool.call.completed",
+                "codex.thread.bound",
+            ],
+        )
+
     def test_native_bub_anchor_supersedes_previous_codex_thread_binding(self) -> None:
         tape_id = "session__codex"
         with TemporaryDirectory() as tmp:

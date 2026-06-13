@@ -105,6 +105,18 @@ Durable projection rules:
   notifications, and non-tool item lifecycle facts remain filtered until a
   concrete consumer exists.
 
+`TapeEvent.type` is the internal bub-codex fact name. The Republic adapter still
+uses native `TapeEntry.kind` when the semantics match:
+
+- `bub.anchor.created` -> `anchor`;
+- completed assistant messages -> `message`;
+- runtime and SDK errors -> `error`;
+- tool started/completed facts -> `tool_call` / `tool_result`;
+- lifecycle, binding, and audit facts stay `event`.
+
+Every bub-codex entry carries the full `TapeEvent` in metadata so the runtime can
+read back old and new storage shapes without losing state.
+
 ## Session Continuity
 
 Bub and Codex use different identities:

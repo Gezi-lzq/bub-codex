@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from republic import TapeEntry, TapeQuery
+from republic.core.errors import ErrorKind, RepublicError
 from republic.tape.store import is_async_tape_store
 
 from .json_utils import dict_or_empty, optional_str, sha256_text
@@ -19,6 +20,7 @@ from .tape_events import TapeEvent
 
 BUB_CODEX_META_KEY = "bub_codex_event"
 BUB_CODEX_META_VALUE = "v0"
+BUB_CODEX_DATA_KEY = "bub_codex_data"
 
 
 @dataclass(slots=True)
@@ -44,11 +46,7 @@ class RepublicTapeStoreAdapter:
         ]
 
     async def _append_one(self, event: TapeEvent) -> None:
-        entry = TapeEntry.event(
-            event.type,
-            event.to_json(),
-            bub_codex_event=BUB_CODEX_META_VALUE,
-        )
+        entry = _entry_for_event(event)
         result = self.store.append(event.tape_id or "", entry)
         if hasattr(result, "__await__"):
             await result
@@ -61,8 +59,10 @@ class RepublicTapeStoreAdapter:
                 if native_anchor := _native_anchor_event(entry, tape_id=tape_id):
                     events.append(native_anchor)
                 continue
-            payload = entry.payload
-            data = payload.get("data") if isinstance(payload, dict) else None
+            data = entry.meta.get(BUB_CODEX_DATA_KEY)
+            if not isinstance(data, dict):
+                payload = entry.payload
+                data = payload.get("data") if isinstance(payload, dict) else None
             if isinstance(data, dict):
                 events.append(_event_from_json(data))
         return events
@@ -81,6 +81,57 @@ async def _read_entries(store: Any, tape_id: str) -> list[TapeEntry]:
             result = await result
         return list(result or ())
     return []
+
+
+def _entry_for_event(event: TapeEvent) -> TapeEntry:
+    meta = {
+        BUB_CODEX_META_KEY: BUB_CODEX_META_VALUE,
+        BUB_CODEX_DATA_KEY: event.to_json(),
+    }
+    if event.type == "bub.anchor.created":
+        return TapeEntry.anchor(
+            _anchor_name(event),
+            state=_anchor_state(event),
+            **meta,
+        )
+    if event.type == "codex.assistant_message.completed":
+        return TapeEntry.message(
+            {
+                "role": "assistant",
+                "content": event.payload.get("assistant_text"),
+                "phase": event.payload.get("phase"),
+            },
+            **meta,
+        )
+    if event.type in {"codex.error.observed", "bub.runtime.error", "bub.anchor.creation.failed"}:
+        return TapeEntry.error(_republic_error_for_event(event), **meta)
+    if event.type == "bub.tool.call.started":
+        return TapeEntry.tool_call([event.payload], **meta)
+    if event.type == "bub.tool.call.completed":
+        return TapeEntry.tool_result([event.payload], **meta)
+    return TapeEntry.event(event.type, event.to_json(), **meta)
+
+
+def _anchor_name(event: TapeEvent) -> str:
+    reason = event.payload.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    anchor_id = event.payload.get("anchor_id") or event.anchor_id
+    return str(anchor_id or "bub-codex")
+
+
+def _anchor_state(event: TapeEvent) -> dict[str, Any]:
+    state = event.payload.get("state")
+    if isinstance(state, dict):
+        return dict(state)
+    return dict(event.payload)
+
+
+def _republic_error_for_event(event: TapeEvent) -> RepublicError:
+    message = event.payload.get("message") or event.payload.get("error") or event.type
+    details = dict(event.payload)
+    details.setdefault("event_type", event.type)
+    return RepublicError(ErrorKind.UNKNOWN, str(message), details=details)
 
 
 def _event_from_json(data: dict[str, Any]) -> TapeEvent:
